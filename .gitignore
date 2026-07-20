@@ -10,3 +10,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Tag corrections you have taught it
+.corrections.json
