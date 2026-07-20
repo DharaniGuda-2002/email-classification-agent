@@ -7,10 +7,12 @@ model is asked to follow — those tools simply do not exist in this process.
 
 import json
 import os
+import re
 
 import requests
 from dotenv import load_dotenv
 
+import email_tool
 from email_tool import (read_emails, read_email_body, DEFAULT_LIMIT,
                         HARD_LIMIT, DEFAULT_DAYS, SOFT_MAX_DAYS)
 
@@ -22,6 +24,15 @@ ENDPOINT = f"{LM_BASE_URL}/chat/completions"
 
 MAX_STEPS = 10        # small models loop; this is the stop
 TIMEOUT = 180         # local inference is slow
+
+# "correct 3 rejection", "#3 is a rejection", "3 is action"
+#
+# The label is matched against the real kinds rather than \w+. Anything else
+# is a message for the model: "3 emails", "5 more" and "2 minutes" all parse
+# as a number followed by a word, and were being swallowed as corrections.
+CORRECT_RE = re.compile(
+    r"^(?:correct\s+)?#?(\d+)\s+(?:is\s+)?(?:an?\s+)?"
+    r"(rejection|action|confirmation|none)$", re.I)
 
 SYSTEM = """You are an email triage assistant with read-only access to an inbox.
 
@@ -212,6 +223,14 @@ def main():
         if user.lower() in ("quit", "exit"):
             break
         if not user:
+            continue
+
+        # Handled here rather than as a model tool. A correction is the user
+        # teaching the system; routing it through the model would let it be
+        # paraphrased, ignored, or triggered by email text.
+        fix = CORRECT_RE.match(user)
+        if fix:
+            print("\n" + email_tool.correct(fix.group(1), fix.group(2)) + "\n")
             continue
         messages.append({"role": "user", "content": user})
         print("\nAgent:", call_model(messages), "\n")

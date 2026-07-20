@@ -27,7 +27,45 @@ This has to read the body: "Thanks for your interest in NRI" is a rejection
 and its subject gives you nothing. Scanning subjects alone found 0 rejections
 in 426 unread; scanning bodies found them immediately.
 
-Detection is patterns plus header structure, so it is good but not perfect.
+### How a kind is decided
+
+Patterns run first — instant, free, deterministic. The model is then asked
+about whatever they left untagged, one email at a time, answering a single
+word. That costs about 0.7s per untagged email.
+
+The split exists because each is good at what the other is not. Patterns
+never drift and cost nothing; the model handles wording nobody wrote a rule
+for. Real examples the patterns miss and the model catches:
+
+```
+"we have chosen to go in a different direction"   -> rejection
+"the role has been filled internally"             -> rejection
+"can you send me your draft chapter?"             -> action
+```
+
+### Correcting it
+
+When it gets one wrong, tell it:
+
+```
+You: 3 is a rejection
+Noted: #3 is 'rejection', not 'untagged'. Saved as an example.
+```
+
+The correction is stored in `.corrections.json` and included as an example in
+every future classification, so it applies from the next email onward.
+
+Be clear about what this is: **the model is not trained and its weights never
+change.** Corrections are examples pasted into a prompt. That is why one
+correction works immediately instead of needing hundreds of labels and a GPU
+run — and why deleting `.corrections.json` reverts the behaviour exactly.
+
+Real fine-tuning is possible but a different project: a few hundred labelled
+emails, a LoRA run, and reloading the tuned weights. Not worth it while a
+prompt gets these right.
+
+Detection is patterns plus header structure plus the model, so it is good but
+not perfect.
 Unusual phrasing will slip through. "A real person wrote to you" is decided
 structurally — no `List-*` or `Feedback-ID` bulk headers, not a role address
 like `careers@` — because marketing from Starbucks and AliExpress is addressed
@@ -36,10 +74,30 @@ to you by name and reads personal otherwise.
 ## Setup
 
 ```bash
+./run.sh
+```
+
+That is the whole thing. It creates the virtualenv, installs dependencies,
+creates `.env` from the template if it is missing, checks your mailbox login
+and the model server, then starts the agent. Each check names the one thing
+that is wrong rather than failing with a traceback.
+
+```bash
+./run.sh --check    # run the checks, don't start the agent
+```
+
+First run will stop and ask you to fill in `.env`. Everything below is what
+those values mean; you do not need to run any of it by hand.
+
+<details>
+<summary>Doing it manually</summary>
+
+```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env      # then fill it in
 ```
+</details>
 
 ```bash
 EMAIL_USER=you@gmail.com
@@ -106,8 +164,14 @@ POP/IMAP → Enable IMAP.
 ## Run
 
 ```bash
+./run.sh
+```
+
+The individual pieces, if you are debugging one layer:
+
+```bash
 python email_tool.py      # IMAP smoke test, no model involved
-python agent.py           # the agent
+python agent.py           # the agent, skipping all preflight checks
 ```
 
 Get the smoke test printing headers before touching the agent.

@@ -27,6 +27,8 @@ from html.parser import HTMLParser
 
 from dotenv import load_dotenv
 
+import classifier
+
 load_dotenv()
 
 IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
@@ -35,7 +37,19 @@ MAX_BODY_CHARS = 1500
 SNIPPET_CHARS = 300   # enough to summarize from, short enough to batch
 DEFAULT_LIMIT = 15    # latest N emails
 
-HARD_LIMIT = int(os.environ.get("MAX_EMAILS", "50"))
+def _env_int(name, default):
+    """A typo in .env should not be an unexplained ValueError at import."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        print(f"   [config] {name}={raw!r} is not a number; using {default}")
+        return default
+
+
+HARD_LIMIT = _env_int("MAX_EMAILS", 50)
 
 
 DEFAULT_DAYS = 1 # default rolling window for read_emails()
@@ -55,10 +69,19 @@ REJECTION_RE = re.compile(r"""
   | not \s+ (?:be \s+)? selected
   | will \s+ not \s+ be \s+ (?:moving|progressing)
   | decided \s+ (?:to \s+ (?:pursue|proceed)|not \s+ to \s+ proceed)
-  | pursue \s+ other | move \s+ forward \s+ with \s+ other
+  | pursue \s+ (?:other|another)
+  # "another candidate", singular, is as common as the plural and matched
+  # nothing until an STV rejection went untagged.
+  | (?:with|selected|chosen) \s+ another \s+ (?:candidate|applicant)
+  | move \s+ forward \s+ with \s+ (?:other|another)
+  | another \s+ candidate
   | (?:was|were) \s+ unsuccessful
   | not \s+ to \s+ move \s+ forward
+  | position \s+ has \s+ been \s+ filled
 """, re.I | re.X)
+
+# Markup that means the body is HTML whatever the Content-Type claims.
+HTML_RE = re.compile(r"<\s*(?:p|div|br|img|table|span|html|body|a)\b", re.I)
 
 # Things that want something from you, with a clock attached.
 ACTION_RE = re.compile(r"""
@@ -96,8 +119,12 @@ BULK_HEADERS = ("feedback-id", "auto-submitted", "errors-to",
                 "x-csa-complaints", "x-report-abuse")
 
 # Nobody is sitting behind these waiting for your reply.
+# Separators must allow . _ and - : "no_reply@" and "do.not.reply@" are as
+# common as the hyphenated spellings, and matching only "-" let a Grifols
+# rejection through as though a human had written it.
 ROLE_ADDRESS_RE = re.compile(r"""^(?:
-    no-?reply | do-?not-?reply | hiring | careers? | jobs? | hr | recruit\w*
+    no[-._]?reply | do[-._]?not[-._]?reply
+  | hiring | careers? | jobs? | hr | recruit\w*
   | info | support | help | team | news(?:letter)? | alerts? | notify
   | notifications? | marketing | mailer | updates? | billing | admin
   | contact | hello | service | email | mail
@@ -117,6 +144,10 @@ SPAM_FOLDER = "[Gmail]/Spam"
 # If that stops being true, this is the first thing that breaks.
 _LAST_FETCH = {}
 _LAST_FOLDER = "INBOX"   # read_email_body must reopen the same folder
+
+# Enough of the last listing to correct a tag by its number, without a
+# second IMAP round trip.
+_LAST_RECORDS = {}
 
 
 # --------------------------------------------------------------- pure funcs
@@ -329,7 +360,14 @@ def _extract_body(msg):
         plain = payload.decode(msg.get_content_charset() or "utf-8",
                                errors="replace")
 
-    return _clean(plain or _strip_html(html))
+    text = plain or html
+    # Senders mislabel HTML as text/plain often enough to matter: a Grifols
+    # rejection arrived as raw <p> and <img> tags, and the markup ate the
+    # whole snippet budget before reaching the sentence that mattered. Trust
+    # the content, not the Content-Type.
+    if HTML_RE.search(text):
+        text = _strip_html(text)
+    return _clean(text)
 
 
 # -------------------------------------------------------------------- edges
@@ -462,10 +500,25 @@ def _collect(heads, ids, cats, cutoff, category, is_spam):
     return out
 
 
-def _tag(emails, snippets):
-    """Assign each email a [kind] and re-derive priority from it, in place."""
+
+def _tag(emails, snippets, use_model=True):
+    """
+    Assign each email a [kind] and re-derive priority from it, in place.
+
+    Patterns first: instant, free, and deterministic where they fire. The
+    model is asked only about what is left over, which is where the patterns
+    were failing anyway — "another candidate" needed two rule fixes before it
+    tagged, and the model got it first try.
+    """
     for e in emails:
         e["kind"] = _kind(e["msg"], snippets.get(e["id"], ""), e["category"])
+
+    if use_model:
+        filled = classifier.refine(emails, snippets, _decode)
+        if filled:
+            print(f"   [model] tagged {filled} the patterns missed")
+
+    for e in emails:
         e["priority"] = _priority(e["msg"], e["labels"], e["category"], e["kind"])
 
 
@@ -552,7 +605,24 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
 
         total = len(emails)
         emails, dropped = _select(emails, limit)
+
+        # _select ranks by priority across every candidate, so an email past
+        # TAG_SCAN_MAX can survive the cut with no snippet and no kind. Fill
+        # those in now — bounded by `limit`, and only when the window was
+        # wide enough to exceed the scan ceiling in the first place.
+        missing = [e["id"] for e in emails if e["id"] not in snippets]
+        if missing:
+            snippets.update(_snippets(m, missing))
+            _tag([e for e in emails if e["id"] in missing], snippets)
+
         _LAST_FETCH.update({n: e["id"] for n, e in enumerate(emails, start=1)})
+        _LAST_RECORDS.clear()
+        _LAST_RECORDS.update({n: {
+            "from": _decode(e["msg"]["From"]),
+            "subject": _decode(e["msg"]["Subject"]),
+            "snippet": snippets.get(e["id"], ""),
+            "kind": e["kind"],
+        } for n, e in enumerate(emails, start=1)})
 
         head = f"{total} {scope}. Showing {len(emails)}"
         if dropped:
@@ -562,6 +632,30 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
             _format(emails, snippets, include_snippets))
     finally:
         m.logout()
+
+
+def correct(number, label):
+    """
+    Teach it that email #N is really a `label`. Returns a status line.
+
+    Stored as an example, not as a rule about this one email — the point is
+    that the next email phrased like it gets classified right too.
+    """
+    try:
+        record = _LAST_RECORDS.get(int(number))
+    except (TypeError, ValueError):
+        return f"ERROR: '{number}' is not a valid email number."
+    if not record:
+        return f"ERROR: no email #{number} in the current listing."
+
+    if not classifier.add_correction(record["from"], record["subject"],
+                                     record["snippet"], label):
+        return (f"ERROR: '{label}' is not a kind. Use one of: "
+                f"{', '.join(classifier.LABELS)}.")
+
+    was = record["kind"] or "untagged"
+    return (f"Noted: #{number} is '{label}', not '{was}'. "
+            f"Saved as an example for future emails.")
 
 
 def read_email_body(number):
