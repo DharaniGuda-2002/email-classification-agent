@@ -8,6 +8,7 @@ model is asked to follow — those tools simply do not exist in this process.
 import json
 import os
 import re
+import sys
 
 import requests
 from dotenv import load_dotenv
@@ -94,13 +95,15 @@ Report only what the tools return. Never invent an email, sender, or subject.
 TOOLS = [
     {"type": "function", "function": {
         "name": "read_emails",
-        "description": ("List emails with Gmail's category, a priority hint, and "
-                        "a [kind] tag (action / rejection / confirmation). Returns "
-                        "number, [PRIORITY], [category], [kind], sender, subject, date."),
+        "description": ("List emails with Gmail's category, a priority hint, "
+                        "and a [kind] tag (action / rejection / confirmation). "
+                        "Returns number, [PRIORITY], [category], [kind], "
+                        "sender, subject, date."),
         "parameters": {"type": "object", "properties": {
             "unread_only": {"type": "boolean", "description": "Default true."},
             "limit": {"type": "integer",
-                      "description": f"Max emails, default {DEFAULT_LIMIT}, hard max {HARD_LIMIT}."},
+                      "description": (f"Max emails, default {DEFAULT_LIMIT}, "
+                                      f"hard max {HARD_LIMIT}.")},
             "category": {"type": "string",
                          "enum": ["primary", "promotions", "social", "updates",
                                   "forums", "spam"],
@@ -118,9 +121,11 @@ TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "read_email_body",
-        "description": "Read the full body of one email by its number from read_emails.",
+        "description": ("Read the full body of one email by its number "
+                        "from read_emails."),
         "parameters": {"type": "object", "properties": {
-            "number": {"type": "integer", "description": "The number shown by read_emails."},
+            "number": {"type": "integer",
+                       "description": "The number shown by read_emails."},
         }, "required": ["number"]},
     }},
 ]
@@ -132,7 +137,11 @@ TOOL_IMPL = {
 
 
 def _run_tool(call):
-    """Always returns a string. Never None, never '' — the model fills gaps by inventing."""
+    """
+    Always returns a string.
+
+    Never None and never "" — a model fills a gap by inventing something.
+    """
     name = call["function"]["name"]
     fn = TOOL_IMPL.get(name)
     if fn is None:
@@ -199,20 +208,75 @@ def call_model(messages):
     return f"Stopped after {MAX_STEPS} steps without a final answer."
 
 
-def main():
-    messages = [{"role": "system", "content": SYSTEM}]
+def _show_links(important_only=True):
+    """Print code-built Gmail links for whatever the last listing held."""
+    block = email_tool.links(important_only=important_only)
+    if block:
+        print(block, "\n")
 
-    print("\n  Inbox triage — read-only. Ctrl-C or 'quit' to leave.\n")
-    print("  try:  what needs my attention?")
-    print("        summarize my unread mail")
-    print("        anything in promotions worth keeping?")
-    print("        check my spam for real mail\n")
 
+BANNER = """
+  Inbox triage — read-only. Ctrl-C or 'quit' to leave.
+
+  ask:  what needs my attention?
+        summarize my unread mail
+        anything in promotions worth keeping?
+        what came in the last 3 days?
+
+  links               Gmail links for everything in the last listing
+  3 is a rejection    teach it a tag it got wrong
+  help                show this again
+"""
+
+TRIAGE = ("Triage my unread mail. Include snippets so you can summarize, "
+          "and group by what needs attention.")
+
+
+def triage(days=DEFAULT_DAYS):
+    """
+    One pass: read the inbox, print the summary and the links. No prompt.
+
+    Split out from main() so it can be scheduled — `agent.py --once` from
+    cron gives you a morning digest without a terminal waiting for input.
+    """
+    messages = [{"role": "system", "content": SYSTEM},
+                {"role": "user", "content": f"{TRIAGE} Cover the last {days} day(s)."}]
+    print(call_model(messages), "\n")
+    _show_links()
+    return messages
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+
+    days = DEFAULT_DAYS
+    for i, arg in enumerate(argv):
+        if arg == "--days" and i + 1 < len(argv):
+            try:
+                days = max(1, int(argv[i + 1]))
+            except ValueError:
+                pass
+
+    if "--help" in argv or "-h" in argv:
+        print(__doc__)
+        print("  --brief       one spoken-style paragraph, no model (for Siri)")
+        print("  --once        triage and exit, no prompt (for cron)")
+        print("  --days N      how far back to look, default 1")
+        return
+
+    # Plain text, no banner, no colour, no model loop — whatever reads this
+    # aloud should not have to strip anything or wait a minute for it.
+    if "--brief" in argv:
+        print(email_tool.brief(days=days))
+        return
+
+    if "--once" in argv:
+        triage(days)
+        return
+
+    print(BANNER)
     print("Reading your inbox...\n")
-    messages.append({"role": "user", "content":
-                     "Triage my unread mail. Include snippets so you can "
-                     "summarize, and group by what needs attention."})
-    print("Agent:", call_model(messages), "\n")
+    messages = triage(days)
 
     while True:
         try:
@@ -232,8 +296,19 @@ def main():
         if fix:
             print("\n" + email_tool.correct(fix.group(1), fix.group(2)) + "\n")
             continue
+
+        if user.lower() in ("links", "link"):
+            print()
+            _show_links(important_only=False)   # all of them, not just important
+            continue
+
+        if user.lower() in ("help", "?"):
+            print(BANNER)
+            continue
+
         messages.append({"role": "user", "content": user})
         print("\nAgent:", call_model(messages), "\n")
+        _show_links()
 
 
 if __name__ == "__main__":

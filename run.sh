@@ -7,8 +7,10 @@
 # traceback from three layers down — the IMAP smoke test is separate from the
 # model check for exactly that reason.
 #
-#   ./run.sh          preflight, then start the agent
-#   ./run.sh --check  preflight only, exit without starting
+#   ./run.sh           preflight, then start the agent
+#   ./run.sh --check   preflight only, exit without starting
+#   ./run.sh --test    preflight, then run the test suite
+#   ./run.sh --once    triage once and exit (for cron)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -35,6 +37,14 @@ if [ ! -f .venv/.installed ] || [ requirements.txt -nt .venv/.installed ]; then
     touch .venv/.installed
 fi
 ok "dependencies"
+
+# Tests need dependencies and nothing else — no mailbox, no model, no .env.
+# Gated here rather than at the end so someone who has just cloned the repo
+# can verify it before handing over a password.
+if [ "${1:-}" = "--test" ]; then
+    step "Tests"
+    exec $PY test_agent.py
+fi
 
 # ------------------------------------------------------------------ 2. .env
 step "2/4  Configuration"
@@ -80,6 +90,22 @@ url=$($PY -c "import agent; print(agent.ENDPOINT)")
 model=$($PY -c "import agent; print(agent.MODEL)")
 base=${url%/chat/completions}
 
+# LM Studio ships a CLI. If it is there, bring the server up rather than
+# telling a human to go and click Start Server — a Siri shortcut or a cron
+# job has nobody to read that message.
+LMS=$(command -v lms || echo "$HOME/.lmstudio/bin/lms")
+
+if ! curl -sf --max-time 5 "$base/models" >/dev/null 2>&1; then
+    if [ -x "$LMS" ]; then
+        printf '  starting LM Studio server...\n'
+        "$LMS" server start >/dev/null 2>&1 || true
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            curl -sf --max-time 2 "$base/models" >/dev/null 2>&1 && break
+            sleep 1
+        done
+    fi
+fi
+
 if ! curl -sf --max-time 5 "$base/models" >/dev/null 2>&1; then
     die "no server at $base" \
         "Open LM Studio -> Developer tab -> Start Server."
@@ -88,12 +114,22 @@ ok "server reachable"
 
 # A loaded model whose id does not match MODEL is the most common silent
 # failure: the server answers, the request 404s, and the error is opaque.
-if ! curl -sf --max-time 5 "$base/models" | grep -q "\"$model\""; then
+if curl -sf --max-time 5 "$base/models" | grep -q "\"$model\""; then
+    ok "model $model loaded"
+elif [ -x "$LMS" ]; then
+    # Loading several GB takes a while, so only do it when it is missing.
+    printf '  loading %s (this can take a minute)...\n' "$model"
+    if "$LMS" load "$model" >/dev/null 2>&1; then
+        ok "model $model loaded"
+    else
+        printf '  \033[33mwarn\033[0m could not load "%s"\n' "$model"
+        printf '       available: %s\n' "$("$LMS" ls 2>/dev/null | \
+            awk 'NF && !/^(You have|LLM|EMBEDDING|$)/ {print $1}' | paste -sd, -)"
+    fi
+else
     printf '  \033[33mwarn\033[0m MODEL="%s" is not in the loaded model list\n' "$model"
     printf '       loaded: %s\n' "$(curl -sf "$base/models" | $PY -c \
         'import json,sys; print(", ".join(m["id"] for m in json.load(sys.stdin)["data"]))')"
-else
-    ok "model $model loaded"
 fi
 
 if [ "${1:-}" = "--check" ]; then
@@ -102,4 +138,4 @@ if [ "${1:-}" = "--check" ]; then
 fi
 
 step "Starting agent"
-exec $PY agent.py
+exec $PY agent.py "$@"

@@ -35,7 +35,8 @@ MAX_CALLS = 20        # ceiling on model calls per listing
 TIMEOUT = 30
 SNIPPET_CHARS = 400
 
-INSTRUCTIONS = """Classify the email. Answer with ONE word only: rejection, action, confirmation, or none.
+INSTRUCTIONS = """Classify the email. Answer with ONE word only:
+rejection, action, confirmation, or none.
 
 rejection    = an application was turned down or the role went to someone else
 action       = wants something from you: interview, assessment, coursework
@@ -106,8 +107,8 @@ def classify(sender, subject, snippet, examples=None):
         r = requests.post(
             ENDPOINT,
             json={"model": MODEL,
-                  "messages": [{"role": "user",
-                                "content": _prompt(sender, subject, snippet, examples)}],
+                  "messages": [{"role": "user", "content": _prompt(
+                      sender, subject, snippet, examples)}],
                   "max_tokens": 8, "temperature": 0},
             timeout=TIMEOUT,
         )
@@ -123,14 +124,16 @@ def classify(sender, subject, snippet, examples=None):
     return ""
 
 
-def refine(emails, snippets, decode):
+def refine(emails, snippets, decode, max_calls=MAX_CALLS):
     """
     Fill in [kind] for emails the patterns left blank. Mutates in place.
 
     Only untagged emails cost a call, and the total is capped — a wide window
-    should not turn into a hundred round trips.
+    should not turn into a hundred round trips. Callers that are being waited
+    on, like the spoken brief, pass a smaller cap: newest first, so a lower
+    ceiling drops the oldest and least urgent.
     """
-    untagged = [e for e in emails if not e["kind"]][:MAX_CALLS]
+    untagged = [e for e in emails if not e["kind"]][:max_calls]
     if not untagged or not MODEL:
         return 0
 

@@ -37,6 +37,7 @@ MAX_BODY_CHARS = 1500
 SNIPPET_CHARS = 300   # enough to summarize from, short enough to batch
 DEFAULT_LIMIT = 15    # latest N emails
 
+
 def _env_int(name, default):
     """A typo in .env should not be an unexplained ValueError at import."""
     raw = os.environ.get(name)
@@ -52,14 +53,18 @@ def _env_int(name, default):
 HARD_LIMIT = _env_int("MAX_EMAILS", 50)
 
 
-DEFAULT_DAYS = 1 # default rolling window for read_emails()
-SOFT_MAX_DAYS = 3   # soft max limit for checking up to 3 days of mail, to avoid long fetches and model timeouts
+# Rolling hours, not calendar days: "1 day" at 9am should not mean nine
+# hours of mail. IMAP SINCE is date-granular, so the server narrows to whole
+# days and _within_window makes the exact cut.
+DEFAULT_DAYS = 1     # default rolling window for read_emails()
+SOFT_MAX_DAYS = 3    # what the model reaches for unasked; not a clamp
 
 PRIORITY_RANK = {"HIGH": 0, "NORMAL": 1, "LOW": 2}
 
 TAG_SCAN_MAX = 80
 
-# rejection email keywords, action keywords, and confirmation keywords are all regexes that match
+# Rejections hide in the body and read as polite, so they are checked before
+# everything else: a rejection usually thanks you for applying too.
 REJECTION_RE = re.compile(r"""
     unfortunately
   | regret \s+ to \s+ inform
@@ -82,6 +87,9 @@ REJECTION_RE = re.compile(r"""
 
 # Markup that means the body is HTML whatever the Content-Type claims.
 HTML_RE = re.compile(r"<\s*(?:p|div|br|img|table|span|html|body|a)\b", re.I)
+
+# Gmail's own thread id, returned alongside the labels in the same FETCH.
+THRID_RE = re.compile(r"X-GM-THRID\s+(\d+)")
 
 # Things that want something from you, with a clock attached.
 ACTION_RE = re.compile(r"""
@@ -276,7 +284,8 @@ def _is_personal(msg):
         return False
 
     user = (os.environ.get("EMAIL_USER") or "").lower()
-    return bool(user and user in f"{msg.get('To','')} {msg.get('Cc','')}".lower())
+    addressed = f"{msg.get('To', '')} {msg.get('Cc', '')}".lower()
+    return bool(user and user in addressed)
 
 
 def _kind(msg, text, category):
@@ -300,6 +309,21 @@ def _kind(msg, text, category):
     if CONFIRMATION_RE.search(blob):
         return "confirmation"
     return ""
+
+
+def _gmail_url(prefix):
+    """
+    Permalink to the original message, from the thread id in a FETCH reply.
+
+    Gmail's web UI addresses threads by the hex form of X-GM-THRID. The
+    account is keyed by address rather than the usual /u/0/ — with more than
+    one Google account signed in, /u/0/ opens the wrong mailbox.
+    """
+    match = THRID_RE.search(prefix or "")
+    if not match:
+        return ""
+    user = os.environ.get("EMAIL_USER", "0")
+    return f"https://mail.google.com/mail/u/{user}/#all/{int(match.group(1)):x}"
 
 
 def _priority(msg, labels, category, kind=""):
@@ -331,10 +355,25 @@ def _priority(msg, labels, category, kind=""):
     # nothing. HIGH stays rare enough to mean something: starred, or Gmail
     # judged it important.
     user = (os.environ.get("EMAIL_USER") or "").lower()
-    if user and user in f"{msg.get('To','')} {msg.get('Cc','')}".lower():
+    addressed = f"{msg.get('To', '')} {msg.get('Cc', '')}".lower()
+    if user and user in addressed:
         return "NORMAL"
 
     return "LOW"   # not addressed to you and not important: bcc'd bulk
+
+
+def _decode_payload(payload, charset):
+    """
+    Bytes -> text, surviving a charset the sender invented.
+
+    Python raises LookupError for an unknown encoding, and a malformed
+    charset is common enough in spam that letting it propagate means one bad
+    email takes down the whole triage.
+    """
+    try:
+        return payload.decode(charset or "utf-8", errors="replace")
+    except (LookupError, AttributeError):
+        return payload.decode("utf-8", errors="replace")
 
 
 def _extract_body(msg):
@@ -349,16 +388,14 @@ def _extract_body(msg):
             payload = part.get_payload(decode=True)
             if not payload:
                 continue
-            text = payload.decode(part.get_content_charset() or "utf-8",
-                                  errors="replace")
+            text = _decode_payload(payload, part.get_content_charset())
             if part.get_content_type() == "text/plain" and not plain:
                 plain = text
             elif part.get_content_type() == "text/html" and not html:
                 html = text
     else:
         payload = msg.get_payload(decode=True) or b""
-        plain = payload.decode(msg.get_content_charset() or "utf-8",
-                               errors="replace")
+        plain = _decode_payload(payload, msg.get_content_charset())
 
     text = plain or html
     # Senders mislabel HTML as text/plain often enough to matter: a Grifols
@@ -496,12 +533,12 @@ def _collect(heads, ids, cats, cutoff, category, is_spam):
 
         cat = "spam" if is_spam else cats.get(msg_id, "primary")
         out.append({"id": msg_id, "msg": msg, "labels": prefix, "category": cat,
-                    "kind": "", "priority": _priority(msg, prefix, cat)})
+                    "url": _gmail_url(prefix), "kind": "",
+                    "priority": _priority(msg, prefix, cat)})
     return out
 
 
-
-def _tag(emails, snippets, use_model=True):
+def _tag(emails, snippets, use_model=True, max_model_calls=None):
     """
     Assign each email a [kind] and re-derive priority from it, in place.
 
@@ -514,7 +551,9 @@ def _tag(emails, snippets, use_model=True):
         e["kind"] = _kind(e["msg"], snippets.get(e["id"], ""), e["category"])
 
     if use_model:
-        filled = classifier.refine(emails, snippets, _decode)
+        filled = classifier.refine(emails, snippets, _decode,
+                                   max_calls=max_model_calls
+                                   or classifier.MAX_CALLS)
         if filled:
             print(f"   [model] tagged {filled} the patterns missed")
 
@@ -541,7 +580,8 @@ def _format(emails, snippets, show_snippets):
 
 
 def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
-                include_snippets=False, days=DEFAULT_DAYS):
+                include_snippets=False, days=DEFAULT_DAYS,
+                max_model_calls=None):
     """
     List email from a rolling time window, with category and priority.
 
@@ -589,7 +629,7 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
         # One fetch for every header, not one per email. Headers are needed
         # for the window check, the priority, and the listing alike, so they
         # are pulled once before anything is narrowed.
-        heads = _fetch_map(m, ids, "(BODY.PEEK[HEADER] X-GM-LABELS)")
+        heads = _fetch_map(m, ids, "(BODY.PEEK[HEADER] X-GM-LABELS X-GM-THRID)")
         cats = {} if is_spam else _category_map(m, ids, days)
 
         emails = _collect(heads, ids, cats, cutoff, category, is_spam)
@@ -601,7 +641,7 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
         # after selection would mean the tag could never save an email from
         # being dropped. Bounded so a wide window stays fast.
         snippets = _snippets(m, [e["id"] for e in emails[:TAG_SCAN_MAX]])
-        _tag(emails, snippets)
+        _tag(emails, snippets, max_model_calls=max_model_calls)
 
         total = len(emails)
         emails, dropped = _select(emails, limit)
@@ -622,6 +662,8 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
             "subject": _decode(e["msg"]["Subject"]),
             "snippet": snippets.get(e["id"], ""),
             "kind": e["kind"],
+            "priority": e["priority"],
+            "url": e["url"],
         } for n, e in enumerate(emails, start=1)})
 
         head = f"{total} {scope}. Showing {len(emails)}"
@@ -632,6 +674,99 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
             _format(emails, snippets, include_snippets))
     finally:
         m.logout()
+
+
+def links(important_only=True):
+    """
+    Clickable Gmail links for the last listing, built here rather than by
+    the model.
+
+    Deliberately not part of the listing the model reads: a 70-character URL
+    is the kind of thing a small model garbles when it repeats it back, and a
+    subtly wrong link is worse than none. Numbers match what it saw, so it can
+    say "email 3" and the link below it is guaranteed intact.
+    """
+    rows = [(n, r) for n, r in sorted(_LAST_RECORDS.items())
+            if r["url"] and (not important_only
+                             or r["kind"] in ("action", "rejection")
+                             or r["priority"] == "HIGH")]
+    if not rows:
+        return ""
+
+    lines = ["Open in Gmail:"]
+    for n, r in rows:
+        tag = f"[{r['kind']}] " if r["kind"] else ""
+        lines.append(f"  {n}. {tag}{r['subject'][:58]}")
+        lines.append(f"     {r['url']}")
+    return "\n".join(lines)
+
+
+def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT):
+    """
+    One short paragraph, plain text, meant to be spoken aloud.
+
+    Built entirely from the tags, with no model loop — the counts and kinds
+    are already computed in code, so this returns in seconds instead of the
+    minute-plus a full triage takes. That matters when something is waiting
+    to read it out.
+    """
+    # Fewer model calls than a full triage: something is waiting to read
+    # this out, and 12 of the 17 seconds a full pass takes is the classifier.
+    read_emails(unread_only=True, limit=limit, days=days, max_model_calls=8)
+    records = list(_LAST_RECORDS.values())
+    if not records:
+        window = "today" if days == 1 else f"the last {days} days"
+        return f"No new mail {window}."
+
+    by_kind = Counter(r["kind"] for r in records)
+    actions = [r for r in records if r["kind"] == "action"]
+    rejections = [r for r in records if r["kind"] == "rejection"]
+
+    parts = [f"{len(records)} new email{'s' if len(records) != 1 else ''}."]
+
+    if actions:
+        parts.append(f"{len(actions)} need{'s' if len(actions) == 1 else ''} a reply:")
+        parts.extend(f"{_sender_name(r['from'])}, {r['subject'][:70]}."
+                     for r in actions[:3])
+    else:
+        parts.append("Nothing needs a reply.")
+
+    if rejections:
+        who = ", ".join(_sender_name(r["from"]) for r in rejections[:4])
+        parts.append(f"{len(rejections)} rejection"
+                     f"{'s' if len(rejections) != 1 else ''}: {who}.")
+
+    if by_kind.get("confirmation"):
+        parts.append(f"{by_kind['confirmation']} application"
+                     f"{'s' if by_kind['confirmation'] != 1 else ''} acknowledged.")
+
+    tagged = sum(by_kind[k] for k in ("action", "rejection", "confirmation"))
+    rest = len(records) - tagged
+    if rest > 0:
+        parts.append(f"{rest} other{'s' if rest != 1 else ''}.")
+
+    return " ".join(parts)
+
+
+def _sender_name(from_header):
+    """
+    "Acme Careers <no-reply@acme.com>" -> "Acme Careers". For speech.
+
+    With no display name, fall back to the second-level domain rather than
+    the first label: "no-reply@us.greenhouse-mail.io" is greenhouse-mail, not
+    "us". Generic display names get the same treatment — "Human Resources"
+    names nobody.
+    """
+    name, addr = parseaddr(from_header or "")
+    domain = addr.split("@")[-1] if "@" in (addr or "") else ""
+    labels = [p for p in domain.split(".") if p]
+    company = labels[-2] if len(labels) >= 2 else (labels[0] if labels else "")
+
+    generic = {"human resources", "hr", "recruiting", "careers", "talent",
+               "no reply", "noreply", "notifications", "jobs"}
+    if name and name.strip().lower() not in generic:
+        return name.strip()
+    return company or name or "unknown"
 
 
 def correct(number, label):
@@ -668,7 +803,8 @@ def read_email_body(number):
 
     msg_id = _LAST_FETCH.get(number)
     if not msg_id:
-        return f"ERROR: no email #{number} in the current listing. Call read_emails first."
+        return (f"ERROR: no email #{number} in the current listing. "
+                "Call read_emails first.")
 
     m = _connect(_LAST_FOLDER)  # spam listings live in another folder
     try:

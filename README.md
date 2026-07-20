@@ -1,19 +1,187 @@
-# email-agent
+# inbox-triage
 
-A local model triages your inbox over IMAP. Read-only.
+A local LLM triages your Gmail. Read-only, runs entirely on your machine, no
+email content leaves it.
 
-Ask it "what needs my attention?" and it groups unread mail into what to act
-on, what to know, and a count of noise — with a one-line summary each.
+Built for a student job hunt — it separates **rejections** from things that
+actually **need a reply**, so a "Thanks for your interest" doesn't sit in the
+same pile as an interview invite.
 
-Categories (promotions, social, updates, spam) come from Gmail's own
-classifier, not from the model guessing at subject lines. Priority is computed
-from headers: starred, Gmail's `\Important`, and `List-Unsubscribe`, which by
-RFC 2369 means bulk sender.
+```
+Reading your inbox...
 
-### Kinds
+### Needs a reply
+None.
 
-Built for a student job hunt. Each email also gets a `[kind]`, computed in
-Python from its body:
+### Rejections
+Grifols, U.S. Data Engineer (544250)
+STV, role not specified
+
+### Worth knowing
+* Google security alert — an app password was created on your account.
+
+### Confirmations
+4 applications acknowledged (Nscale, Starbucks, Workday x2)
+
+### Noise
+21 (job alerts, promotions, social)
+
+Open in Gmail:
+  15. [rejection] Thank You For Your Interest In Grifols
+      https://mail.google.com/mail/u/you@gmail.com/#all/19f7b02065a8d740
+
+You: what about the last 3 days?
+```
+
+---
+
+## Quickstart
+
+You need [LM Studio](https://lmstudio.ai) with a tool-capable model loaded
+(Qwen 2.5 7B Instruct works well), and a Gmail account.
+
+```bash
+git clone <your-repo-url> && cd inbox-triage
+./run.sh
+```
+
+The first run creates `.env` and stops. Fill in three values:
+
+```bash
+EMAIL_USER=you@gmail.com
+EMAIL_PASS=abcdefghijklmnop        # app password, see below
+MODEL=qwen2.5-7b-instruct          # must match the model loaded in LM Studio
+```
+
+Then `./run.sh` again. That's it.
+
+### Getting the app password
+
+Not your Google password — a 16-character app password:
+
+1. Enable 2-Step Verification on your Google account (app passwords do not
+   appear until you do).
+2. Generate one at
+   [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
+3. Paste it into `.env`. Spaces are stripped for you.
+
+If Gmail rejects it: Gmail Settings → Forwarding and POP/IMAP → **Enable
+IMAP**.
+
+### In LM Studio
+
+Download a tool-capable model. You do **not** need to start the server or
+load the model by hand — if LM Studio's `lms` CLI is installed (run
+`lms bootstrap` once), `run.sh` starts the server and loads `MODEL` for you.
+
+The model id must match `MODEL` in `.env` exactly. If it does not, `run.sh`
+tries to load it and lists what you actually have.
+
+---
+
+## Using it
+
+```bash
+./run.sh              # preflight checks, then the agent
+./run.sh --once       # triage once and exit — for cron
+./run.sh --check      # checks only, don't start
+./run.sh --test       # run the test suite
+```
+
+Ask it anything:
+
+```
+what needs my attention?
+summarize my unread mail
+what came in the last 3 days?
+anything in promotions worth keeping?
+check my spam for real mail
+```
+
+Three commands are handled in code rather than by the model:
+
+| command | does |
+|---|---|
+| `links` | Gmail links for every email in the last listing |
+| `3 is a rejection` | teaches it a tag it got wrong |
+| `help` | shows the banner again |
+
+### Asking Siri
+
+`--brief` prints one plain-text paragraph meant to be read aloud:
+
+```
+26 new emails. Nothing needs a reply. 1 rejection: grifols.
+1 application acknowledged. 24 others.
+```
+
+It takes about **8 seconds**, against 90–120 for a full triage, because the
+counts and tags are computed in code — the slow part of a triage is the model
+writing prose, and nobody needs prose spoken at them.
+
+Step-by-step setup, plus the script to paste, is in
+**[shortcuts/](shortcuts/)** — the short version is one Shortcut with two
+actions, pointing at `shortcuts/check-emails.sh`.
+
+**You do not need to start the server yourself.** If `run.sh` finds the `lms`
+CLI (shipped with LM Studio, at `~/.lmstudio/bin/lms`) it starts the server
+and loads `MODEL` before doing anything else. Without that CLI it falls back
+to telling you to press Start Server, which is no use to a shortcut —
+`lms bootstrap` puts it on your PATH.
+
+What it costs, measured on an 8.97 GB model:
+
+| state | time |
+|---|---|
+| server up, model loaded | ~9s |
+| server up, model unloaded | ~21s |
+| server stopped | ~9s (plus load if needed) |
+
+LM Studio unloads an idle model after its TTL, 60 minutes by default. So a
+once-a-day Siri question usually pays the 21 seconds, not the 9. Raising the
+TTL in LM Studio keeps it resident and fast, at the cost of holding the
+model in RAM.
+
+Quitting the LM Studio app entirely is untested — `lms` is a separate binary
+and is expected to bring the backend up on its own, but confirm it on your
+machine before relying on it.
+
+### A daily digest
+
+`--once` prints and exits, so cron works:
+
+```bash
+0 8 * * * cd /path/to/inbox-triage && ./run.sh --once >> ~/triage.log 2>&1
+```
+
+---
+
+## How it works
+
+```
+run.sh          preflight: venv, .env, IMAP login, model server
+  └── agent.py         model loop, prompt, tool schemas
+       ├── email_tool.py    IMAP, categories, priority, kind tags
+       └── classifier.py    model-judged tags + your corrections
+```
+
+The model gets exactly two tools — `read_emails` and `read_email_body`. There
+is no send, no delete, no shell, no file access. Not as a rule it is asked to
+follow: **those tools do not exist in the process.**
+
+### What is decided in code, not by the model
+
+The model is good at summarising and bad at being consistent, so the facts
+are computed before it ever sees them:
+
+**Category** — promotions / social / updates / spam come from Gmail's own
+classifier via `X-GM-RAW` search. Gmail already ran that model; a 7B redoing
+it would be slower and worse.
+
+**Priority** — HIGH / NORMAL / LOW from header facts: starred, Gmail's
+`\Important`, and `List-Unsubscribe`, which by RFC 2369 means bulk sender.
+
+**Kind** — the job-hunt part:
 
 | kind | means | lands in |
 |---|---|---|
@@ -23,19 +191,14 @@ Python from its body:
 
 A rejection never appears under "Needs a reply" — it asks nothing of you.
 
-This has to read the body: "Thanks for your interest in NRI" is a rejection
-and its subject gives you nothing. Scanning subjects alone found 0 rejections
-in 426 unread; scanning bodies found them immediately.
-
 ### How a kind is decided
 
-Patterns run first — instant, free, deterministic. The model is then asked
-about whatever they left untagged, one email at a time, answering a single
-word. That costs about 0.7s per untagged email.
+Patterns run first: instant, free, deterministic. The model is then asked
+about whatever is left, one email at a time, answering a single word
+(~0.7s each).
 
-The split exists because each is good at what the other is not. Patterns
-never drift and cost nothing; the model handles wording nobody wrote a rule
-for. Real examples the patterns miss and the model catches:
+Each covers the other's weakness. Patterns never drift; the model handles
+wording nobody wrote a rule for:
 
 ```
 "we have chosen to go in a different direction"   -> rejection
@@ -43,135 +206,116 @@ for. Real examples the patterns miss and the model catches:
 "can you send me your draft chapter?"             -> action
 ```
 
-### Correcting it
+Detecting a rejection requires reading the **body**. "Thanks for your interest
+in NRI" tells you nothing — scanning subjects found 0 rejections in 426
+unread; scanning bodies found them immediately.
 
-When it gets one wrong, tell it:
+### Correcting it
 
 ```
 You: 3 is a rejection
 Noted: #3 is 'rejection', not 'untagged'. Saved as an example.
 ```
 
-The correction is stored in `.corrections.json` and included as an example in
-every future classification, so it applies from the next email onward.
+Saved to `.corrections.json` and included as an example in every future
+classification, so it applies from the next email onward.
 
-Be clear about what this is: **the model is not trained and its weights never
+**Be clear about what this is: the model is not trained and its weights never
 change.** Corrections are examples pasted into a prompt. That is why one
 correction works immediately instead of needing hundreds of labels and a GPU
 run — and why deleting `.corrections.json` reverts the behaviour exactly.
 
-Real fine-tuning is possible but a different project: a few hundred labelled
-emails, a LoRA run, and reloading the tuned weights. Not worth it while a
-prompt gets these right.
+### Links
 
-Detection is patterns plus header structure plus the model, so it is good but
-not perfect.
-Unusual phrasing will slip through. "A real person wrote to you" is decided
-structurally — no `List-*` or `Feedback-ID` bulk headers, not a role address
-like `careers@` — because marketing from Starbucks and AliExpress is addressed
-to you by name and reads personal otherwise.
+After each answer, Gmail links print for anything important. Built in code
+from `X-GM-THRID` — deliberately never shown to the model, because a small
+model garbles long URLs when repeating them, and a subtly wrong link is worse
+than none. The numbers match what the model saw.
 
-## Setup
+---
 
-```bash
-./run.sh
-```
+## Configuration
 
-That is the whole thing. It creates the virtualenv, installs dependencies,
-creates `.env` from the template if it is missing, checks your mailbox login
-and the model server, then starts the agent. Each check names the one thing
-that is wrong rather than failing with a traceback.
+Everything optional lives in `.env`:
 
-```bash
-./run.sh --check    # run the checks, don't start the agent
-```
-
-First run will stop and ask you to fill in `.env`. Everything below is what
-those values mean; you do not need to run any of it by hand.
-
-<details>
-<summary>Doing it manually</summary>
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env      # then fill it in
-```
-</details>
-
-```bash
-EMAIL_USER=you@gmail.com
-IMAP_HOST=imap.gmail.com               # change for other providers
-LM_BASE_URL=http://localhost:1234/v1   # LM Studio server
-MODEL=qwen2.5-7b-instruct              # must match the loaded model exactly
-
-EMAIL_PASS=abcdefghijklmnop            # app-password mode; omit to use OAuth
-```
-
-LM Studio: load a tool-capable model, Developer tab → Start Server.
+| variable | default | does |
+|---|---|---|
+| `EMAIL_USER` | — | your address |
+| `EMAIL_PASS` | — | app password |
+| `MODEL` | — | must match LM Studio exactly |
+| `IMAP_HOST` | `imap.gmail.com` | change for other providers |
+| `LM_BASE_URL` | `http://localhost:1234/v1` | LM Studio server |
+| `MAX_EMAILS` | `50` | ceiling per call |
+| `CORRECTIONS_FILE` | `.corrections.json` | where corrections live |
 
 ### How far back
 
-Defaults to the **last 24 hours**, unread only. Ask for more in conversation —
-"the last three days", "anything I missed this week" — and the agent widens
-the window. It prefers 3 days or fewer unless you say otherwise.
+Defaults to the **last 24 hours**, unread only. Ask for more in conversation
+and it widens. Rolling hours, not calendar days: at 9am, "1 day" means since
+9am yesterday.
 
-Rolling hours, not calendar days: at 9am, "1 day" means since 9am yesterday,
-not nine hours of mail. IMAP's `SINCE` is date-granular, so the server narrows
-to whole days and the exact cut happens on the `Date` header.
+### How many
 
-### How many emails
+`MAX_EMAILS` is not there to be tidy. A mailbox with 13k unread would put
+~1.3M characters of headers into a context window that holds a fraction of
+that, and the model starts dropping or inventing entries well before it
+errors. Raise it as far as your model actually holds.
 
-`MAX_EMAILS` (default 50) caps what one call can pull back. It is not there to
-be tidy — a mailbox with 13k unread would put ~1.3M characters of headers into
-a context window that holds a fraction of that, and the model starts dropping
-or inventing entries well before it errors. Raise it as far as your model
-actually holds; the limit is the model's, not this code's.
+Past the cap, lowest-priority mail is dropped first and the tool says what it
+dropped — so a summary never quietly implies it covered everything.
 
-Past the cap, the lowest-priority mail is dropped first — promotions and
-social before anything addressed to you — and the tool says what it dropped
-("showing 15 of 41, omitted 3 promotions, 1 social, 22 updates") so a summary
-never quietly implies it covered the whole inbox.
+---
 
-```bash
-MAX_EMAILS=100
-```
+## Privacy and safety
 
-## Auth
+- **Read-only, structurally.** `readonly=True` and `BODY.PEEK` mean the agent
+  cannot mark mail as read, let alone change it.
+- **Nothing leaves your machine.** IMAP to your provider, HTTP to localhost.
+  No third-party API, no telemetry.
+- **Email content is treated as hostile.** Bodies are fenced in
+  `UNTRUSTED` markers and the model is told they are data, never
+  instructions. Since it has no tools that can act, an injected email has
+  nothing to reach for.
+- `.env` and `.corrections.json` are gitignored. Corrections contain email
+  subjects and snippets — keep them local.
 
-An app password, in `EMAIL_PASS`:
+---
 
-1. Enable 2-Step Verification on your Google account (app passwords do not
-   appear until you do).
-2. Generate one at `myaccount.google.com/apppasswords`.
-3. Put it in `.env`. Spaces are stripped for you.
+## Other providers
 
-Note what this is *not*: your account password plus a 2FA code. Google turned
-off basic auth for Gmail, and IMAP could not carry an interactive challenge
-anyway — a single LOGIN command, no round trip to prompt you on. The app
-password is the supported substitute for exactly that situation, and the 2FA
-you enabled to create it is what backs it.
+The IMAP layer is generic; the Gmail-specific parts degrade rather than break:
 
-It never expires. The cost is a long-lived secret on disk with full mailbox
-access; revoke it by deleting it from that page. `.env` is gitignored.
+| feature | non-Gmail |
+|---|---|
+| listing, priority, kinds | works |
+| categories | everything reads as `primary` |
+| spam folder | needs the right folder name in `SPAM_FOLDER` |
+| Gmail links | absent |
 
-Read-only is enforced here rather than by the credential — `readonly=True`,
-`BODY.PEEK`, and no send or delete tool existing in the process.
+Set `IMAP_HOST` and try it — `python email_tool.py` is a mailbox-only smoke
+test with no model involved.
 
-If Gmail rejects it, check IMAP is enabled: Gmail Settings → Forwarding and
-POP/IMAP → Enable IMAP.
+---
 
-## Run
+## Tests
 
 ```bash
-./run.sh
+./run.sh --test
 ```
 
-The individual pieces, if you are debugging one layer:
+51 tests, no network or mailbox required. Most are regressions — each one is
+a bug that shipped and was only caught by running against a real inbox:
 
-```bash
-python email_tool.py      # IMAP smoke test, no model involved
-python agent.py           # the agent, skipping all preflight checks
-```
+- `re.VERBOSE` strips literal spaces, so `other candidates` compiled as
+  `othercandidates` and matched nothing
+- Gmail returns FETCH replies in ascending id while we ask newest-first, so
+  zipping the lists paired every snippet with the **wrong email**
+- HTML mislabelled as `text/plain` ate the snippet budget before reaching the
+  sentence that mattered
+- `no_reply@` with an underscore slipped past the role-address check
 
-Get the smoke test printing headers before touching the agent.
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
