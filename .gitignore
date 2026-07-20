@@ -1,8 +1,15 @@
 # Secrets — never commit
 .env
 
+# Editors and OS cruft
+.DS_Store
+.idea/
+
 # Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Tag corrections you have taught it
+.corrections.json
