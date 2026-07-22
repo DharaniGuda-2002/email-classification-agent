@@ -16,6 +16,17 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PY=.venv/bin/python
+
+# Generate and offer to install the Siri shortcut. Needs no preflight, so it
+# runs before the checks — you can build the shortcut without a model loaded.
+if [ "${1:-}" = "--shortcut" ]; then
+    "$PY" shortcuts/make_shortcut.py || exit 1
+    printf '\nOpen it now to install? [y/N] '
+    read -r reply
+    [ "$reply" = "y" ] || [ "$reply" = "Y" ] && open "Check My Emails.shortcut"
+    exit 0
+fi
+
 step() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 ok()   { printf '  \033[32mok\033[0m   %s\n' "$1"; }
 bad()  { printf '  \033[31mfail\033[0m %s\n' "$1"; }

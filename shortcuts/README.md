@@ -1,141 +1,100 @@
 # Asking Siri to check your email
 
-"Hey Siri, check my emails" → it reads a one-line summary aloud:
+"Hey Siri, Check My Emails" → it runs the agent and reads a one-line summary
+aloud:
 
-> "26 new emails. Nothing needs a reply. 1 rejection: grifols.
-> 1 application acknowledged. 24 others."
+> "50 new emails. 3 need a reply: Brex, Guidehouse, Axle. 3 rejections:
+> Walker, Guidehouse, Claritev. 11 applications acknowledged. 33 others."
 
-Takes about 20 seconds. Everything runs on your Mac.
+Siri waits for the model to finish, then speaks the real result — about 20
+seconds. Everything runs on your Mac.
 
 ---
 
-## Before you start
-
-Get the agent itself working first:
+## Install it (no manual building)
 
 ```bash
-cd ..
-./run.sh --brief
+./run.sh --shortcut
 ```
 
-If that prints a sentence, carry on. If it does not, fix that first — the
-Shortcut only wraps this command, so it cannot work until this does.
+That generates a **signed** `Check My Emails.shortcut`, then asks if you want
+to open it. Say yes, click **Add Shortcut** in the window that appears, and
+that is the whole setup. You never build actions by hand.
 
----
-
-## Step 1 — copy the script path
+If you skipped the prompt, install it later with:
 
 ```bash
-cd shortcuts
-chmod +x check-emails.sh     # once, so macOS will run it
-pwd                          # copy this, you need it in step 3
+open "Check My Emails.shortcut"
 ```
 
-Your full path is that, plus `/check-emails.sh`. For example:
+Then say **"Hey Siri, Check My Emails."**
 
-```
-/Users/you/Desktop/agent/shortcuts/check-emails.sh
-```
+The shortcut embeds this project's path, so if you move the folder, run
+`./run.sh --shortcut` again.
 
-## Step 2 — make the Shortcut
+### What it contains
 
-Open **Shortcuts** (already on your Mac) → **File → New Shortcut**.
-
-Name it **exactly what you want to say to Siri**. The name *is* the voice
-command, so name it `Check my emails`, not `Email Agent v2`.
-
-## Step 3 — add the two actions
-
-**Action 1: Run Shell Script**
-
-Search the right-hand panel for "Run Shell Script" and drag it in.
-
-| field | value |
-|---|---|
-| Shell | `/bin/zsh` |
-| Input | leave empty |
-| Pass Input | *as arguments* |
-| Script | the full path from step 1 |
-
-The script box holds one line and nothing else:
-
-```
-/Users/you/Desktop/agent/shortcuts/check-emails.sh
-```
-
-**Action 2: Speak Text**
-
-Drag **Speak Text** in below it. Set its input to **Shell Script Result** —
-click the text field, and pick it from the variables that appear.
-
-Order matters: Run Shell Script first, Speak Text second.
-
-## Step 4 — run it
-
-Press ▶ in Shortcuts. macOS will ask permission to run shell scripts the
-first time — allow it.
-
-Then say **"Hey Siri, check my emails."**
+Two actions: **Run Shell Script** (runs `shortcuts/check-emails.sh`, which
+does `run.sh --brief`) and **Speak Text** (reads the result). The shell action
+blocks until the model replies, which is why Siri waits for the real answer.
 
 ---
 
-## What to expect
+## Before it will work
+
+- **Run the agent once in a terminal first** — `./run.sh` — so the mailbox
+  login and the model are known to work. Siri can only run what already runs.
+- **LM Studio does not need to be open.** `run.sh` starts it via the `lms`
+  CLI. First run of the day is slower (~20s) because the model loads cold.
+- **Full Disk Access.** The project lives under `~/Desktop`, which macOS
+  protects. If the shortcut is silent, give **Shortcuts** Full Disk Access in
+  System Settings → Privacy & Security.
+
+---
+
+## Timing
 
 | starting state | time |
 |---|---|
 | LM Studio open, model loaded | ~9s |
-| LM Studio open, model idle | ~21s |
+| model idle (unloaded after 60 min) | ~20s |
 | LM Studio fully quit | ~22s |
 
-**Quitting LM Studio is fine** — the script starts it. It launches the app
-rather than a background service, so expect the LM Studio window to appear.
-
-LM Studio unloads an idle model after 60 minutes, so a once-a-day question
-almost always pays the ~21 seconds. Raising the TTL in LM Studio keeps it
-loaded and fast, at the cost of holding the model in RAM.
+A once-a-day question almost always pays the ~20s, since the model unloads
+after 60 minutes idle. Raise the TTL in LM Studio to keep it loaded.
 
 ---
 
-## If it does not work
+## If it doesn't work
 
-**Siri says "Could not check your email."**
-The agent failed before producing a summary. Run it by hand to see why:
+**Test with ▶ first.** Open the shortcut in the Shortcuts app and click ▶.
+That surfaces errors in a window instead of as silence from Siri.
 
-```bash
-./shortcuts/check-emails.sh
-cd .. && ./run.sh --check
-```
-
-**Nothing is spoken at all.**
-The Speak Text action is missing, or its input is not set to Shell Script
-Result.
-
-**"The operation couldn't be completed"**
-The script is not executable. Run `chmod +x check-emails.sh`.
-
-**It works in Terminal but not in the Shortcut.**
-Shortcuts runs with a minimal environment and does not read your shell
-profile. The script already adds Homebrew and the LM Studio CLI to `PATH`; if
-your setup lives somewhere else, add that path near the top of
-`check-emails.sh`.
-
-**Siri opens the Shortcuts app instead of running it.**
-The name is ambiguous. Rename it to something distinctive — "Check my emails"
-rather than "Email".
+| symptom | fix |
+|---|---|
+| "Could not check your email" | agent failed to start — run `./run.sh --check` |
+| silence | Run Shell Script path is wrong, or Shortcuts lacks Full Disk Access |
+| Siri opens the app instead of running | name collides — rename the shortcut |
+| nothing spoken | the Speak Text action lost its input; regenerate |
 
 ---
 
-## Variations
+## Building it by hand
 
-**Show it instead of speaking it** — swap Speak Text for **Show Result**.
+Only if `./run.sh --shortcut` fails to sign. In the **Shortcuts** app, new
+shortcut named **Check My Emails**, two actions:
 
-**A different window** — edit the last line of `check-emails.sh`:
+1. **Run Shell Script** — Shell `/bin/zsh`, script:
+   ```
+   /Users/you/Desktop/agent/shortcuts/check-emails.sh
+   ```
+2. **Speak Text** — input set to **Shell Script Result**.
 
-```bash
-OUTPUT=$(./run.sh --brief --days 3 2>/dev/null | tail -1)
-```
+---
 
-**On your iPhone** — this cannot work as-is. The script needs your Mac's
-Python, LM Studio and mailbox credentials. Running it on iPhone would mean
-exposing the Mac over SSH and calling it remotely, which is a different
+## On your iPhone
+
+Not as-is. The script needs this Mac's Python, LM Studio and mailbox
+credentials, and the Run Shell Script action does not exist in Shortcuts on
+iOS. Reaching it from a phone means exposing the Mac over SSH — a separate
 project with real security tradeoffs.

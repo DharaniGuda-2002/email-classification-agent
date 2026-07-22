@@ -13,3 +13,7 @@ venv/
 
 # Tag corrections you have taught it
 .corrections.json
+
+# Generated Siri shortcut (regenerate with ./run.sh --shortcut)
+*.shortcut
+.unsigned.shortcut

@@ -108,20 +108,24 @@ Three commands are handled in code rather than by the model:
 
 ### Asking Siri
 
-`--brief` prints one plain-text paragraph meant to be read aloud:
+```bash
+./run.sh --shortcut
+```
+
+Generates a **signed** "Check My Emails" shortcut and offers to install it —
+click **Add Shortcut** once, no building by hand. Then "Hey Siri, Check My
+Emails" runs the agent and speaks a one-line summary back:
 
 ```
 26 new emails. Nothing needs a reply. 1 rejection: grifols.
 1 application acknowledged. 24 others.
 ```
 
-It takes about **8 seconds**, against 90–120 for a full triage, because the
-counts and tags are computed in code — the slow part of a triage is the model
-writing prose, and nobody needs prose spoken at them.
+That paragraph (`--brief`) takes about **20 seconds** — the counts and tags
+are computed in code, so it skips the slow part of a full triage, which is the
+model writing prose nobody needs spoken at them.
 
-Step-by-step setup, plus the script to paste, is in
-**[shortcuts/](shortcuts/)** — the short version is one Shortcut with two
-actions, pointing at `shortcuts/check-emails.sh`.
+Setup, timing, and troubleshooting are in **[shortcuts/](shortcuts/)**.
 
 **You do not need to start the server yourself.** If `run.sh` finds the `lms`
 CLI (shipped with LM Studio, at `~/.lmstudio/bin/lms`) it starts the server
