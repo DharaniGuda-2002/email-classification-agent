@@ -109,7 +109,7 @@ def classify(sender, subject, snippet, examples=None):
             json={"model": MODEL,
                   "messages": [{"role": "user", "content": _prompt(
                       sender, subject, snippet, examples)}],
-                  "max_tokens": 8, "temperature": 0},
+                  "temperature": 0},
             timeout=TIMEOUT,
         )
         r.raise_for_status()
