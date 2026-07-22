@@ -27,15 +27,18 @@ if [ "${1:-}" = "--shortcut" ]; then
     exit 0
 fi
 
-step() { printf '\n\033[1m%s\033[0m\n' "$1"; }
-ok()   { printf '  \033[32mok\033[0m   %s\n' "$1"; }
-bad()  { printf '  \033[31mfail\033[0m %s\n' "$1"; }
-die()  { bad "$1"; [ $# -gt 1 ] && printf '       %s\n' "$2"; exit 1; }
+# Progress goes to stderr; stdout is reserved for the agent's own output, so a
+# caller can pipe it clean — the Siri brief is multi-line and must not be
+# mixed with preflight noise.
+step() { printf '\n\033[1m%s\033[0m\n' "$1" >&2; }
+ok()   { printf '  \033[32mok\033[0m   %s\n' "$1" >&2; }
+bad()  { printf '  \033[31mfail\033[0m %s\n' "$1" >&2; }
+die()  { bad "$1"; [ $# -gt 1 ] && printf '       %s\n' "$2" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. python
 step "1/4  Environment"
 if [ ! -x "$PY" ]; then
-    printf '  creating .venv...\n'
+    printf '  creating .venv...\n' >&2
     python3 -m venv .venv
 fi
 ok "virtualenv"
@@ -43,7 +46,7 @@ ok "virtualenv"
 # Reinstall only when requirements.txt is newer than the marker we drop after
 # a successful install. Saves ~3s on every subsequent run.
 if [ ! -f .venv/.installed ] || [ requirements.txt -nt .venv/.installed ]; then
-    printf '  installing dependencies...\n'
+    printf '  installing dependencies...\n' >&2
     $PY -m pip install -q -r requirements.txt
     touch .venv/.installed
 fi
@@ -108,7 +111,7 @@ LMS=$(command -v lms || echo "$HOME/.lmstudio/bin/lms")
 
 if ! curl -sf --max-time 5 "$base/models" >/dev/null 2>&1; then
     if [ -x "$LMS" ]; then
-        printf '  starting LM Studio server...\n'
+        printf '  starting LM Studio server...\n' >&2
         "$LMS" server start >/dev/null 2>&1 || true
         for _ in 1 2 3 4 5 6 7 8 9 10; do
             curl -sf --max-time 2 "$base/models" >/dev/null 2>&1 && break
@@ -129,22 +132,22 @@ if curl -sf --max-time 5 "$base/models" | grep -q "\"$model\""; then
     ok "model $model loaded"
 elif [ -x "$LMS" ]; then
     # Loading several GB takes a while, so only do it when it is missing.
-    printf '  loading %s (this can take a minute)...\n' "$model"
+    printf '  loading %s (this can take a minute)...\n' "$model" >&2
     if "$LMS" load "$model" >/dev/null 2>&1; then
         ok "model $model loaded"
     else
-        printf '  \033[33mwarn\033[0m could not load "%s"\n' "$model"
+        printf '  \033[33mwarn\033[0m could not load "%s"\n' "$model" >&2
         printf '       available: %s\n' "$("$LMS" ls 2>/dev/null | \
-            awk 'NF && !/^(You have|LLM|EMBEDDING|$)/ {print $1}' | paste -sd, -)"
+            awk 'NF && !/^(You have|LLM|EMBEDDING|$)/ {print $1}' | paste -sd, -)" >&2
     fi
 else
-    printf '  \033[33mwarn\033[0m MODEL="%s" is not in the loaded model list\n' "$model"
+    printf '  \033[33mwarn\033[0m MODEL="%s" is not in the loaded model list\n' "$model" >&2
     printf '       loaded: %s\n' "$(curl -sf "$base/models" | $PY -c \
-        'import json,sys; print(", ".join(m["id"] for m in json.load(sys.stdin)["data"]))')"
+        'import json,sys; print(", ".join(m["id"] for m in json.load(sys.stdin)["data"]))')" >&2
 fi
 
 if [ "${1:-}" = "--check" ]; then
-    printf '\n\033[32mAll checks passed.\033[0m\n'
+    printf '\n\033[32mAll checks passed.\033[0m\n' >&2
     exit 0
 fi
 

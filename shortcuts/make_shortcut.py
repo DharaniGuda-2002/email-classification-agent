@@ -4,13 +4,13 @@ Generate a signed Siri shortcut you can double-click to install.
 
     python shortcuts/make_shortcut.py
 
-Builds a two-action shortcut — Run Shell Script, Speak Text — and signs it
+Builds a two-action shortcut — Run Shell Script, Show Result — and signs it
 with macOS's own `shortcuts` tool so Shortcuts will accept it. No manual
 building in the Shortcuts app; you click "Add Shortcut" once and you are done.
 
-Saying "Hey Siri, Check My Emails" runs the agent and speaks the one-line
-brief back. The Run Shell Script action blocks until the model replies, so
-Siri waits for the real answer rather than a placeholder.
+Saying "Hey Siri, Check My Emails" runs the agent and shows the brief on
+screen. The Run Shell Script action blocks until the model replies, so Siri
+waits for the real answer rather than a placeholder.
 
 macOS only — the Run Shell Script action does not exist in Shortcuts on
 iPhone, and the script needs this Mac's Python, LM Studio and credentials.
@@ -38,9 +38,9 @@ def output_of(uid, name):
     """
     A reference to a previous action's output.
 
-    Actions do not reliably chain implicitly — a Speak Text with no explicit
-    input says nothing, which looks like Siri ignoring you. The hand-off is
-    wired by UUID, the way the Shortcuts app does it internally.
+    Actions do not reliably chain implicitly — a Show Result with no explicit
+    input displays nothing, which looks like Siri ignoring you. The hand-off
+    is wired by UUID, the way the Shortcuts app does it internally.
     """
     return {"WFSerializationType": "WFTextTokenAttachment",
             "Value": {"OutputUUID": uid, "OutputName": name,
@@ -70,8 +70,10 @@ def build():
                    {"Script": script, "Shell": "/bin/zsh",
                     "InputMode": "to stdin", "RunAsAdministrator": False},
                    uid=shell_uid),
-            action("is.workflow.actions.speaktext",
-                   {"WFText": output_of(shell_uid, "Shell Script Result")}),
+            # Show Result puts the text on screen — as a Siri card by voice,
+            # or a dialog when run from the app.
+            action("is.workflow.actions.showresult",
+                   {"Text": output_of(shell_uid, "Shell Script Result")}),
         ],
     }
 

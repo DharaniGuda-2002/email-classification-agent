@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The script a Siri Shortcut runs. Prints ONE line, nothing else.
+# The script a Siri Shortcut runs. Prints the multi-line brief, nothing else.
 #
 # Paste the absolute path to this file into a Shortcuts "Run Shell Script"
 # action — see README.md in this folder.
@@ -23,11 +23,13 @@ cd "$PROJECT" || { echo "Could not find the email agent folder."; exit 1; }
 # CLI are not on PATH. Add the usual locations explicitly.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.lmstudio/bin:$PATH"
 
-OUTPUT=$(./run.sh --brief 2>/dev/null | tail -1)
+# run.sh sends all preflight noise to stderr, so stdout is only the brief —
+# which is multi-line now, hence no `tail`. 2>/dev/null drops the noise.
+OUTPUT=$(./run.sh --brief 2>/dev/null)
 
-# An empty result means the preflight failed before the brief ever printed —
-# usually LM Studio missing, or credentials not set. Say something out loud
-# rather than leaving Siri silent.
+# Empty means preflight failed before the brief ever printed — usually LM
+# Studio missing or credentials not set. Show something rather than leaving
+# Siri blank.
 if [ -z "$OUTPUT" ]; then
     echo "Could not check your email. The mail agent could not start."
     exit 1

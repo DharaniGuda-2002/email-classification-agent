@@ -55,19 +55,31 @@ def test_rejections():
         check(f"ignores: {text[:38]}", not t.REJECTION_RE.search(text))
 
 
+def _is_action(text):
+    return bool(t.ACTION_STRONG_RE.search(text) or t.ACTION_WEAK_RE.search(text))
+
+
 def test_actions():
     print("\naction detection")
     for text in ("please complete the assessment by Friday",
                  "schedule a call to discuss next steps",
                  "your assignment deadline is tomorrow"):
-        check(f"matches: {text[:38]}", bool(t.ACTION_RE.search(text)))
+        check(f"matches: {text[:38]}", _is_action(text))
 
     # Bare "offer" is the native tongue of every promotion in an inbox;
     # an Amex "earn $300" ad was tagged as an action item because of it.
     check("ignores promotional 'offer'",
-          not t.ACTION_RE.search("earn $300 with our best offer today"))
+          not _is_action("earn $300 with our best offer today"))
     check("matches job offer",
-          bool(t.ACTION_RE.search("we are pleased to extend a job offer")))
+          _is_action("we are pleased to extend a job offer"))
+
+    # interview/assessment are STRONG and outrank a confirmation; the please/
+    # deadline boilerplate is WEAK and yields to one.
+    check("interview is a strong signal",
+          bool(t.ACTION_STRONG_RE.search("we'd like to schedule an interview")))
+    check("'next steps' is only weak",
+          not t.ACTION_STRONG_RE.search("we'll share next steps soon")
+          and bool(t.ACTION_WEAK_RE.search("we'll share next steps soon")))
 
 
 # ------------------------------------------------------------------ senders
@@ -159,6 +171,19 @@ def test_kind():
     check("confirmation from body",
           t._kind(m, "your application was received", "primary") == "confirmation")
     check("nothing to tag", t._kind(m, "here is our newsletter", "primary") == "")
+
+    # "received your JOB application" — the exact "received your application"
+    # pattern missed the commonest phrasing.
+    check("confirmation with a word between",
+          t._kind(m, "we received your job application", "primary") == "confirmation")
+
+    # A confirmation that looks personal must stay a confirmation: the content
+    # signal beats the _is_personal guess. Six acknowledgements landed under
+    # "needs a reply" when this order was reversed.
+    human = msg(Subject="Thank you for applying", From="jane.recruiter@startup.com")
+    check("confirmation beats the personal guess",
+          t._kind(human, "Thank you for applying to Thatch", "primary")
+          == "confirmation")
 
     # "deadline" and "offer" are the native tongue of marketing, so a
     # promotion matching an action pattern must still not become an action.

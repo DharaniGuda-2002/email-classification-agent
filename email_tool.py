@@ -19,6 +19,7 @@ import email
 import imaplib
 import os
 import re
+import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
@@ -46,7 +47,8 @@ def _env_int(name, default):
     try:
         return max(1, int(raw))
     except ValueError:
-        print(f"   [config] {name}={raw!r} is not a number; using {default}")
+        print(f"   [config] {name}={raw!r} is not a number; using {default}",
+              file=sys.stderr)
         return default
 
 
@@ -91,8 +93,9 @@ HTML_RE = re.compile(r"<\s*(?:p|div|br|img|table|span|html|body|a)\b", re.I)
 # Gmail's own thread id, returned alongside the labels in the same FETCH.
 THRID_RE = re.compile(r"X-GM-THRID\s+(\d+)")
 
-# Things that want something from you, with a clock attached.
-ACTION_RE = re.compile(r"""
+# Unambiguous action: an interview, a test, a real ask. These outrank a
+# confirmation — "thanks for applying, now do this assessment" needs a reply.
+ACTION_STRONG_RE = re.compile(r"""
     \binterview\b | \bassessment\b | \bexam\b
   | coding \s+ challenge | take.?home | online \s+ test
   | hackerrank | codesignal | \bkarat\b
@@ -102,15 +105,26 @@ ACTION_RE = re.compile(r"""
   # Amex's "earn $300" matched it. Only job-shaped offers count.
   | (?:job|employment|internship) \s+ offer
   | offer \s+ (?:letter | of \s+ employment)
-  | next \s+ steps | action \s+ required
+  | action \s+ required
+""", re.I | re.X)
+
+# Weak action: boilerplate that also litters acknowledgement emails ("please
+# complete your profile", "we'll share next steps"). Checked AFTER
+# confirmation, so a pure "thanks for applying" is not dragged into the
+# needs-a-reply pile by its own footer.
+ACTION_WEAK_RE = re.compile(r"""
+    next \s+ steps
   | please \s+ (?:complete|submit|confirm|respond|reply)
   | due \s+ (?:by|on) | deadline
 """, re.I | re.X)
 
 CONFIRMATION_RE = re.compile(r"""
     application \s+ (?:was \s+ | has \s+ been \s+)? (?:received|submitted)
-  | thank \s+ you \s+ for \s+ applying
-  | received \s+ your \s+ application
+  | thank \s+ you \s+ for \s+ (?:applying | your \s+ (?:application|interest))
+  | thanks \s+ for \s+ applying
+  # "received your job application" — allow a word between, or the exact match
+  # misses the most common phrasing.
+  | received \s+ your \s+ (?:\w+ \s+)? application
   | successfully \s+ submitted
   # "talent community" is deliberately absent: the recurring jobs2web alerts
   # all cite it in their footer, so it tagged weekly job blasts as though
@@ -302,12 +316,17 @@ def _kind(msg, text, category):
     blob = f"{_decode(msg.get('Subject'))}\n{text}"
     if REJECTION_RE.search(blob):
         return "rejection"
-    if ACTION_RE.search(blob):
+    if ACTION_STRONG_RE.search(blob):      # interview, assessment — always a reply
         return "action"
-    if _is_personal(msg):          # a human wrote to you; that is the signal
-        return "action"
+    # Confirmation beats weak-action boilerplate and the _is_personal guess:
+    # a "thanks for applying" whose footer says "next steps" is still just an
+    # acknowledgement. Reversing this put six of them under "needs a reply".
     if CONFIRMATION_RE.search(blob):
         return "confirmation"
+    if ACTION_WEAK_RE.search(blob):
+        return "action"
+    if _is_personal(msg):          # last resort: a human seems to have written
+        return "action"
     return ""
 
 
@@ -555,7 +574,7 @@ def _tag(emails, snippets, use_model=True, max_model_calls=None):
                                    max_calls=max_model_calls
                                    or classifier.MAX_CALLS)
         if filled:
-            print(f"   [model] tagged {filled} the patterns missed")
+            print(f"   [model] tagged {filled} the patterns missed", file=sys.stderr)
 
     for e in emails:
         e["priority"] = _priority(e["msg"], e["labels"], e["category"], e["kind"])
@@ -596,7 +615,7 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
     """
     global _LAST_FOLDER
     print(f"   [tool] read_emails days={days} category={category} "
-          f"snippets={include_snippets}")
+          f"snippets={include_snippets}", file=sys.stderr)
     # The model supplies these. Clamp rather than trust.
     try:
         limit = max(1, min(int(limit), HARD_LIMIT))
@@ -703,49 +722,52 @@ def links(important_only=True):
 
 def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT):
     """
-    One short paragraph, plain text, meant to be spoken aloud.
+    A short, multi-line summary meant to be shown on screen (or spoken).
 
-    Built entirely from the tags, with no model loop — the counts and kinds
-    are already computed in code, so this returns in seconds instead of the
-    minute-plus a full triage takes. That matters when something is waiting
-    to read it out.
+    Built entirely from the tags, with no model loop writing prose — the
+    counts and kinds are already computed in code, so this returns in seconds
+    instead of the minute-plus a full triage takes. That matters when Siri is
+    waiting to display it.
+
+    Newlines read as sections on a Show Result card and as pauses in Speak
+    Text, so one format serves both.
     """
-    # Fewer model calls than a full triage: something is waiting to read
-    # this out, and 12 of the 17 seconds a full pass takes is the classifier.
+    # Fewer model calls than a full triage: something is waiting on this, and
+    # most of a full pass's time is the classifier.
     read_emails(unread_only=True, limit=limit, days=days, max_model_calls=8)
     records = list(_LAST_RECORDS.values())
+
+    window = "today" if days == 1 else f"the last {days} days"
     if not records:
-        window = "today" if days == 1 else f"the last {days} days"
         return f"No new mail {window}."
 
     by_kind = Counter(r["kind"] for r in records)
     actions = [r for r in records if r["kind"] == "action"]
     rejections = [r for r in records if r["kind"] == "rejection"]
 
-    parts = [f"{len(records)} new email{'s' if len(records) != 1 else ''}."]
+    lines = [f"{len(records)} new email{'s' if len(records) != 1 else ''} {window}."]
 
     if actions:
-        parts.append(f"{len(actions)} need{'s' if len(actions) == 1 else ''} a reply:")
-        parts.extend(f"{_sender_name(r['from'])}, {r['subject'][:70]}."
-                     for r in actions[:3])
+        lines.append(f"\nNeeds a reply ({len(actions)}):")
+        lines.extend(f"• {_sender_name(r['from'])} — {r['subject'][:60]}"
+                     for r in actions[:5])
     else:
-        parts.append("Nothing needs a reply.")
+        lines.append("\nNothing needs a reply.")
 
     if rejections:
-        who = ", ".join(_sender_name(r["from"]) for r in rejections[:4])
-        parts.append(f"{len(rejections)} rejection"
-                     f"{'s' if len(rejections) != 1 else ''}: {who}.")
+        who = ", ".join(_sender_name(r["from"]) for r in rejections[:5])
+        lines.append(f"\nRejections ({len(rejections)}): {who}")
 
     if by_kind.get("confirmation"):
-        parts.append(f"{by_kind['confirmation']} application"
-                     f"{'s' if by_kind['confirmation'] != 1 else ''} acknowledged.")
+        n = by_kind["confirmation"]
+        lines.append(f"\n{n} application{'s' if n != 1 else ''} acknowledged.")
 
     tagged = sum(by_kind[k] for k in ("action", "rejection", "confirmation"))
     rest = len(records) - tagged
     if rest > 0:
-        parts.append(f"{rest} other{'s' if rest != 1 else ''}.")
+        lines.append(f"{rest} other{'s' if rest != 1 else ''}.")
 
-    return " ".join(parts)
+    return "\n".join(lines)
 
 
 def _sender_name(from_header):
@@ -795,7 +817,7 @@ def correct(number, label):
 
 def read_email_body(number):
     """Body of ONE email, by the number shown in read_emails."""
-    print(f"   [tool] read_email_body #{number}")
+    print(f"   [tool] read_email_body #{number}", file=sys.stderr)
     try:
         number = int(number)
     except (TypeError, ValueError):
