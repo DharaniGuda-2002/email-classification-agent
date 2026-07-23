@@ -52,7 +52,16 @@ def build():
     # BASH_SOURCE path detection inside it works even though this action's
     # shell is zsh. The runner handles PATH, the model server, and a spoken
     # fallback if anything fails.
-    script = f'{_quote(RUNNER)}\n'
+    # Guard the embedded path. If the project moves, the old path goes stale
+    # and the action produces nothing — which reads as Siri silently ignoring
+    # you. This turns that silence into an instruction instead.
+    script = (
+        f'S={_quote(RUNNER)}\n'
+        f'if [ -x "$S" ]; then "$S"; else\n'
+        f'  echo "Email agent not found at $S."\n'
+        f'  echo "It probably moved. Reinstall: run ./run.sh --shortcut there."\n'
+        f'fi\n'
+    )
     shell_uid = str(uuid.uuid4()).upper()
 
     return {
