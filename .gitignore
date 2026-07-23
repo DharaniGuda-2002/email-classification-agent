@@ -17,3 +17,6 @@ venv/
 # Generated Siri shortcut (regenerate with ./run.sh --shortcut)
 *.shortcut
 .unsigned.shortcut
+
+# Siri command/response log (contains email subjects and senders)
+siri.log

@@ -298,6 +298,37 @@ def test_gmail_links():
 
 # ------------------------------------------------------------------- config
 
+def test_siri_log():
+    print("\nsiri logging")
+    import agent
+    tmp = "/tmp/siri_test.log"
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    original = agent.SIRI_LOG
+    try:
+        agent.SIRI_LOG = __import__("pathlib").Path(tmp)
+        agent.siri_log("ASK   test")
+        agent.siri_log("REPLY 'hi'")
+        body = open(tmp).read()
+        check("writes a timestamped ASK line",
+              "ASK   test" in body and body[:4].isdigit())
+        check("appends rather than overwrites", body.count("\n") == 2)
+    finally:
+        agent.SIRI_LOG = original
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+    # A broken log path must never raise — logging can't break a request.
+    agent.SIRI_LOG = __import__("pathlib").Path("/nonexistent-dir/x.log")
+    try:
+        agent.siri_log("should not raise")
+        check("bad log path does not raise", True)
+    except Exception:
+        check("bad log path does not raise", False)
+    finally:
+        agent.SIRI_LOG = original
+
+
 def test_config():
     print("\nconfiguration")
     # A typo in .env used to be an unexplained ValueError at import time.
@@ -336,7 +367,7 @@ if __name__ == "__main__":
     for fn in (test_rejections, test_actions, test_sender_classification,
                test_body_extraction, test_hostile_input, test_clean,
                test_kind, test_priority, test_sender_name,
-               test_window, test_selection,
+               test_siri_log, test_window, test_selection,
                test_fetch_map, test_gmail_links, test_config):
         fn()
 

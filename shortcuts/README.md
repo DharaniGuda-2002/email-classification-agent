@@ -65,10 +65,32 @@ after 60 minutes idle. Raise the TTL in LM Studio to keep it loaded.
 
 ---
 
+## Seeing what Siri asked and answered
+
+Every voice run appends to **`siri.log`** in the project root — the request,
+the reply, and any error. Siri runs headless, so without this a blank card
+leaves nothing to debug from.
+
+```bash
+tail -f siri.log
+```
+
+```
+2026-07-23 14:16:30  ASK   check emails (days=1)
+2026-07-23 14:16:41  REPLY '3 new emails.\nNeeds a reply (1):\n• Acme — Interview'
+```
+
+An `ASK` with no matching `REPLY` means the run never finished — usually the
+model was still loading, or Siri timed out. `siri.log` holds email subjects
+and senders, so it is gitignored and stays on your machine.
+
 ## If it doesn't work
 
 **Test with ▶ first.** Open the shortcut in the Shortcuts app and click ▶.
 That surfaces errors in a window instead of as silence from Siri.
+
+**Check `siri.log`** — if `ASK` is there but no `REPLY`, the script started
+but the model didn't answer in time.
 
 | symptom | fix |
 |---|---|

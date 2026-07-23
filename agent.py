@@ -9,6 +9,8 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
@@ -18,6 +20,21 @@ from email_tool import (read_emails, read_email_body, DEFAULT_LIMIT,
                         HARD_LIMIT, DEFAULT_DAYS, SOFT_MAX_DAYS)
 
 load_dotenv()
+
+# Siri runs headless — a Show Result card that comes up blank leaves no trace
+# of what the script asked or answered. This file is that trace.
+SIRI_LOG = Path(__file__).resolve().parent / "siri.log"
+
+
+def siri_log(line):
+    """Append one timestamped line to siri.log. Never raises — a broken log
+    must not break the request it is trying to record."""
+    try:
+        with SIRI_LOG.open("a") as fh:
+            fh.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {line}\n")
+    except OSError:
+        pass
+
 
 LM_BASE_URL = os.environ.get("LM_BASE_URL", "http://localhost:1234/v1").rstrip("/")
 MODEL = os.environ.get("MODEL")
@@ -267,7 +284,15 @@ def main(argv=None):
     # Plain text, no banner, no colour, no model loop — whatever reads this
     # aloud should not have to strip anything or wait a minute for it.
     if "--brief" in argv:
-        print(email_tool.brief(days=days))
+        siri_log(f"ASK   check emails (days={days})")
+        try:
+            reply = email_tool.brief(days=days)
+        except Exception as exc:
+            siri_log(f"ERROR {type(exc).__name__}: {exc}")
+            print("Could not check your email.")
+            return
+        siri_log(f"REPLY {reply!r}")
+        print(reply)
         return
 
     if "--once" in argv:
