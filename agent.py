@@ -16,6 +16,7 @@ import requests
 from dotenv import load_dotenv
 
 import email_tool
+import session
 from email_tool import (read_emails, read_email_body, DEFAULT_LIMIT,
                         HARD_LIMIT, DEFAULT_DAYS, SOFT_MAX_DAYS)
 
@@ -78,6 +79,26 @@ them; do not second-guess them or re-sort by your own reading.
                   deadline, or a real person writing to you directly
   [rejection]     an application that was turned down
   [confirmation]  an application acknowledged. Nothing to do.
+
+ANSWER THE QUESTION THAT WAS ASKED
+Asked something specific — "how many rejections?", "anything from Google?",
+"any interviews this week?" — answer that, in a sentence or two, and stop.
+Do not append the full triage. "Three rejections: Adobe, Notion, Hinge
+Health." is a complete answer.
+
+The section format below is only for an open request to triage, summarise, or
+"what needs my attention".
+
+This is a conversation. A follow-up with no subject of its own repeats the
+LAST question over a new window. It is not a request to triage.
+
+  You: how many rejections do I have?
+  Me:  Three: Adobe, Notion, Hinge Health.
+  You: what about the last 3 days?
+  Me:  Seven over three days: Adobe, Notion, Hinge Health, Stripe, ...
+
+Note what the second answer is NOT: it is not a list of sections. Carry the
+earlier question forward and answer it again.
 
 HOW TO TRIAGE
 The user is a student job-hunting. Use exactly these sections, in this order,
@@ -249,40 +270,66 @@ TRIAGE = ("Triage my unread mail. Include snippets so you can summarize, "
           "and group by what needs attention.")
 
 
-def triage(days=DEFAULT_DAYS):
+def ask(instruction, session_name="", days=DEFAULT_DAYS):
     """
-    One pass: read the inbox, print the summary and the links. No prompt.
+    One instruction, start to finish. Returns the reply as text.
 
-    Split out from main() so it can be scheduled — `agent.py --once` from
-    cron gives you a morning digest without a terminal waiting for input.
+    The single path both the terminal chat and Siri go through, so a question
+    behaves the same however it arrives. With a session name, earlier turns
+    are loaded first and the result saved, which is what makes "what about
+    the last three days?" resolve against the answer before it.
     """
-    messages = [{"role": "system", "content": SYSTEM},
-                {"role": "user", "content": f"{TRIAGE} Cover the last {days} day(s)."}]
-    print(call_model(messages), "\n")
+    messages = session.load(session_name)
+    if not messages:
+        messages = [{"role": "system", "content": SYSTEM}]
+    messages.append({"role": "user", "content": instruction})
+
+    reply = call_model(messages)
+    session.save(session_name, messages)
+    return reply
+
+
+def triage(days=DEFAULT_DAYS, session_name=""):
+    """One pass: read the inbox, print the summary and the links. No prompt."""
+    reply = ask(f"{TRIAGE} Cover the last {days} day(s).", session_name, days)
+    print(reply, "\n")
     _show_links()
-    return messages
+    return reply
+
+
+def _flag(argv, name, default=None):
+    """Value after `--name`, or default."""
+    if name in argv:
+        i = argv.index(name)
+        if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+            return argv[i + 1]
+    return default
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
 
-    days = DEFAULT_DAYS
-    for i, arg in enumerate(argv):
-        if arg == "--days" and i + 1 < len(argv):
-            try:
-                days = max(1, int(argv[i + 1]))
-            except ValueError:
-                pass
+    try:
+        days = max(1, int(_flag(argv, "--days", DEFAULT_DAYS)))
+    except (TypeError, ValueError):
+        days = DEFAULT_DAYS
+    # The terminal chat keeps its own session so follow-ups work there too,
+    # and stays separate from the voice one — a half-finished spoken question
+    # should not bleed into what you are typing.
+    session_name = _flag(argv, "--session", "") or ""
+    if not session_name and "--once" not in argv and "--brief" not in argv:
+        session_name = "terminal"
 
     if "--help" in argv or "-h" in argv:
         print(__doc__)
-        print("  --brief       one spoken-style paragraph, no model (for Siri)")
-        print("  --once        triage and exit, no prompt (for cron)")
-        print("  --days N      how far back to look, default 1")
+        print("  --brief          one short summary, no model prose (for Siri)")
+        print('  --once "..."     one instruction, no chat (Siri and cron)')
+        print("  --session NAME   remember the conversation between runs")
+        print("  --days N         how far back to look, default 1")
         return
 
-    # Plain text, no banner, no colour, no model loop — whatever reads this
-    # aloud should not have to strip anything or wait a minute for it.
+    # Plain text, no banner, no colour, no model loop — whatever shows this
+    # should not have to strip anything or wait a minute for it.
     if "--brief" in argv:
         siri_log(f"ASK   check emails (days={days})")
         try:
@@ -296,12 +343,29 @@ def main(argv=None):
         return
 
     if "--once" in argv:
-        triage(days)
+        # Anything after the flags is the instruction. With none, fall back to
+        # the standard triage so `--once` alone still works for cron.
+        words = [a for a in argv
+                 if not a.startswith("--")
+                 and a not in (session_name, str(days))]
+        instruction = " ".join(words).strip()
+        siri_log(f"ASK   {instruction or '<triage>'!r}  session={session_name or '-'}")
+        try:
+            if instruction:
+                reply = ask(instruction, session_name, days)
+                print(reply)
+            else:
+                reply = triage(days, session_name)
+        except Exception as exc:
+            siri_log(f"ERROR {type(exc).__name__}: {exc}")
+            print("Sorry, I could not check your email.")
+            return
+        siri_log(f"REPLY {reply!r}")
         return
 
     print(BANNER)
     print("Reading your inbox...\n")
-    messages = triage(days)
+    triage(days, session_name)
 
     while True:
         try:
@@ -312,6 +376,11 @@ def main(argv=None):
         if user.lower() in ("quit", "exit"):
             break
         if not user:
+            continue
+
+        if user.lower() in ("new", "start over", "reset"):
+            session.clear(session_name)
+            print("\nStarting fresh.\n")
             continue
 
         # Handled here rather than as a model tool. A correction is the user
@@ -331,8 +400,7 @@ def main(argv=None):
             print(BANNER)
             continue
 
-        messages.append({"role": "user", "content": user})
-        print("\nAgent:", call_model(messages), "\n")
+        print("\nAgent:", ask(user, session_name, days), "\n")
         _show_links()
 
 

@@ -109,7 +109,11 @@ def classify(sender, subject, snippet, examples=None):
             json={"model": MODEL,
                   "messages": [{"role": "user", "content": _prompt(
                       sender, subject, snippet, examples)}],
-                  "temperature": 0},
+                  # A label is one token. The cap is not there to truncate an
+                  # answer — it stops the model writing a paragraph of
+                  # reasoning first, which took one call from 0.3s to 10s and
+                  # pushed the Siri brief past its timeout.
+                  "max_tokens": 16, "temperature": 0},
             timeout=TIMEOUT,
         )
         r.raise_for_status()

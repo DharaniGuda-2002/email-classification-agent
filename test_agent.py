@@ -329,6 +329,48 @@ def test_siri_log():
         agent.SIRI_LOG = original
 
 
+def test_session():
+    print("\nconversation memory")
+    import session
+    original = session.SESSION_DIR
+    tmp = __import__("pathlib").Path("/tmp/sess_test")
+    try:
+        session.SESSION_DIR = tmp
+        tmp.mkdir(exist_ok=True)
+
+        check("no session yet", session.load("x") == [])
+        session.save("x", [{"role": "user", "content": "hi"}])
+        check("round-trips", len(session.load("x")) == 1)
+
+        # A name arrives from a shortcut argument, so it must never escape
+        # the session directory.
+        check("path traversal is sanitised",
+              session._path("../../etc/passwd").parent == tmp)
+        check("empty name falls back", session._path("").name == "default.json")
+
+        # A long chat must not run away with the context window.
+        session.save("x", [{"role": "user", "content": str(i)}
+                           for i in range(session.MAX_MESSAGES + 20)])
+        check("trims to the cap", len(session.load("x")) == session.MAX_MESSAGES)
+
+        # Stale context silently answering the wrong question is worse than
+        # starting over.
+        import json
+        import time
+        (tmp / "old.json").write_text(json.dumps({
+            "updated_at": time.time() - (session.TTL_MINUTES + 5) * 60,
+            "messages": [{"role": "user", "content": "stale"}]}))
+        check("expired session is dropped", session.load("old") == [])
+
+        (tmp / "bad.json").write_text("{not json")
+        check("corrupt session does not raise", session.load("bad") == [])
+
+        check("clear removes it", session.clear("x") and session.load("x") == [])
+    finally:
+        session.SESSION_DIR = original
+        __import__("shutil").rmtree(tmp, ignore_errors=True)
+
+
 def test_config():
     print("\nconfiguration")
     # A typo in .env used to be an unexplained ValueError at import time.
@@ -367,7 +409,7 @@ if __name__ == "__main__":
     for fn in (test_rejections, test_actions, test_sender_classification,
                test_body_extraction, test_hostile_input, test_clean,
                test_kind, test_priority, test_sender_name,
-               test_siri_log, test_window, test_selection,
+               test_siri_log, test_session, test_window, test_selection,
                test_fetch_map, test_gmail_links, test_config):
         fn()
 

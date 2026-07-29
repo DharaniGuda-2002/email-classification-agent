@@ -14,12 +14,21 @@ seconds. Everything runs on your Mac.
 ## Install it (no manual building)
 
 ```bash
-./run.sh --shortcut
+./mail shortcut
 ```
 
-That generates a **signed** `Check My Emails.shortcut`, then asks if you want
-to open it. Say yes, click **Add Shortcut** in the window that appears, and
-that is the whole setup. You never build actions by hand.
+That generates **two signed shortcuts**, then asks if you want to open them.
+Say yes, click **Add Shortcut** in each window, and that is the whole setup.
+You never build actions by hand.
+
+| shortcut | say | does |
+|---|---|---|
+| Check My Emails | "Hey Siri, Check My Emails" | today's summary, no question |
+| Ask My Email | "Hey Siri, Ask My Email" | asks what you want, then answers |
+
+**Ask My Email** is the conversational one: Siri prompts, you say *"any
+interviews this week?"*, it answers. It shares memory with the terminal chat,
+so a follow-up in the same 15 minutes still knows what you meant.
 
 If you skipped the prompt, install it later with:
 

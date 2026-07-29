@@ -20,3 +20,6 @@ venv/
 
 # Siri command/response log (contains email subjects and senders)
 siri.log
+
+# Conversation memory (contains your questions and email details)
+.sessions/

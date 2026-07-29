@@ -21,9 +21,16 @@ PY=.venv/bin/python
 # runs before the checks — you can build the shortcut without a model loaded.
 if [ "${1:-}" = "--shortcut" ]; then
     "$PY" shortcuts/make_shortcut.py || exit 1
-    printf '\nOpen it now to install? [y/N] '
+    printf '\nOpen them now to install? [y/N] '
     read -r reply
-    [ "$reply" = "y" ] || [ "$reply" = "Y" ] && open "Check My Emails.shortcut"
+    if [ "$reply" = "y" ] || [ "$reply" = "Y" ]; then
+        # One at a time: Shortcuts shows a modal per import, and opening both
+        # at once stacks them so the second looks like nothing happened.
+        open "Check My Emails.shortcut"
+        printf 'Click Add Shortcut, then press Return for the second one. '
+        read -r _
+        open "Ask My Email.shortcut"
+    fi
     exit 0
 fi
 

@@ -81,49 +81,80 @@ tries to load it and lists what you actually have.
 
 ## Using it
 
+One command for everything:
+
 ```bash
-./run.sh              # preflight checks, then the agent
-./run.sh --once       # triage once and exit — for cron
-./run.sh --check      # checks only, don't start
-./run.sh --test       # run the test suite
+./mail                    # start chatting with your inbox
+./mail brief              # one short summary, fast
+./mail once "any interviews?"   # a single question, then exit
+./mail log                # what Siri asked and answered
+./mail help               # every command
 ```
 
 Ask it anything:
 
 ```
 what needs my attention?
-summarize my unread mail
+how many rejections do I have?
+anything from Google?
 what came in the last 3 days?
-anything in promotions worth keeping?
 check my spam for real mail
 ```
 
-Three commands are handled in code rather than by the model:
+### It remembers
+
+The chat keeps context, so follow-ups work:
+
+```
+You: how many rejections do I have?
+Agent: Three: Adobe, Notion, Hinge Health.
+
+You: what about the last 3 days?
+Agent: Seven over three days: Adobe, Notion, Hinge Health, Stripe, …
+```
+
+The second question names no subject — it carries the first one forward.
+Conversations expire after 15 minutes, because a "today" from this morning
+should not still be in context tonight. Say `new` to start fresh, or
+`./mail forget`.
+
+Four commands are handled in code rather than by the model, so email text can
+never trigger them:
 
 | command | does |
 |---|---|
 | `links` | Gmail links for every email in the last listing |
 | `3 is a rejection` | teaches it a tag it got wrong |
+| `new` | forget the conversation and start over |
 | `help` | shows the banner again |
 
 ### Asking Siri
 
 ```bash
-./run.sh --shortcut
+./mail shortcut
 ```
 
-Generates a **signed** "Check My Emails" shortcut and offers to install it —
-click **Add Shortcut** once, no building by hand. Then "Hey Siri, Check My
-Emails" runs the agent and speaks a one-line summary back:
+Generates **two signed shortcuts** and offers to install them — click **Add
+Shortcut** once each, no building by hand.
+
+**"Hey Siri, Check My Emails"** — the fixed summary, on screen in ~20s:
 
 ```
-26 new emails. Nothing needs a reply. 1 rejection: grifols.
-1 application acknowledged. 24 others.
+26 new emails today.
+
+Needs a reply (1):
+• Acme — Interview Thursday
+
+Rejections (2): grifols, newsela
+12 applications acknowledged.
 ```
 
-That paragraph (`--brief`) takes about **20 seconds** — the counts and tags
-are computed in code, so it skips the slow part of a full triage, which is the
-model writing prose nobody needs spoken at them.
+Fast because the counts and tags are computed in code, skipping the slow part
+of a triage — the model writing prose nobody needs.
+
+**"Hey Siri, Ask My Email"** — a conversation. Siri asks what you want, you
+say *"any interviews this week?"*, and it answers. It shares the same memory
+as the terminal chat, so follow-ups work by voice too.
 
 Setup, timing, and troubleshooting are in **[shortcuts/](shortcuts/)**.
 

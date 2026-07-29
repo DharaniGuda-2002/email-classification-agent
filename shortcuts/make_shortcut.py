@@ -24,8 +24,12 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 RUNNER = PROJECT / "shortcuts" / "check-emails.sh"
-NAME = "Check My Emails"
+ASK_RUNNER = PROJECT / "shortcuts" / "ask-email.sh"
+
+NAME = "Check My Emails"          # fixed summary
+ASK_NAME = "Ask My Email"         # conversational
 OUT = PROJECT / f"{NAME}.shortcut"
+ASK_OUT = PROJECT / f"{ASK_NAME}.shortcut"
 
 
 def action(identifier, params, uid=None):
@@ -47,23 +51,24 @@ def output_of(uid, name):
                       "Type": "ActionOutput"}}
 
 
-def build():
-    # Invoking the runner as a command lets its own shebang pick bash, so the
-    # BASH_SOURCE path detection inside it works even though this action's
-    # shell is zsh. The runner handles PATH, the model server, and a spoken
-    # fallback if anything fails.
-    # Guard the embedded path. If the project moves, the old path goes stale
-    # and the action produces nothing — which reads as Siri silently ignoring
-    # you. This turns that silence into an instruction instead.
-    script = (
-        f'S={_quote(RUNNER)}\n'
+def _guarded(runner):
+    """
+    The shell one-liner, wrapped in an existence check.
+
+    If the project moves, the embedded path goes stale and Run Shell Script
+    produces nothing — which reads as Siri silently ignoring you. This turns
+    that silence into an instruction.
+    """
+    return (
+        f'S={_quote(runner)}\n'
         f'if [ -x "$S" ]; then "$S"; else\n'
         f'  echo "Email agent not found at $S."\n'
-        f'  echo "It probably moved. Reinstall: run ./run.sh --shortcut there."\n'
+        f'  echo "It probably moved. Reinstall: run ./mail shortcut there."\n'
         f'fi\n'
     )
-    shell_uid = str(uuid.uuid4()).upper()
 
+
+def _envelope(actions):
     return {
         "WFWorkflowClientVersion": "2038.1.3",
         "WFWorkflowMinimumClientVersion": 900,
@@ -74,55 +79,101 @@ def build():
         "WFWorkflowImportQuestions": [],
         "WFWorkflowTypes": ["NCWidget"],
         "WFWorkflowInputContentItemClasses": ["WFStringContentItem"],
-        "WFWorkflowActions": [
-            action("is.workflow.actions.runshellscript",
-                   {"Script": script, "Shell": "/bin/zsh",
-                    "InputMode": "to stdin", "RunAsAdministrator": False},
-                   uid=shell_uid),
-            # Show Result puts the text on screen — as a Siri card by voice,
-            # or a dialog when run from the app.
-            action("is.workflow.actions.showresult",
-                   {"Text": output_of(shell_uid, "Shell Script Result")}),
-        ],
+        "WFWorkflowActions": actions,
     }
+
+
+def build():
+    """The fixed summary: no question, just today's triage on screen."""
+    shell_uid = str(uuid.uuid4()).upper()
+    return _envelope([
+        action("is.workflow.actions.runshellscript",
+               {"Script": _guarded(RUNNER), "Shell": "/bin/zsh",
+                "InputMode": "to stdin", "RunAsAdministrator": False},
+               uid=shell_uid),
+        # Show Result puts the text on screen — a Siri card by voice, or a
+        # dialog when run from the app.
+        action("is.workflow.actions.showresult",
+               {"Text": output_of(shell_uid, "Shell Script Result")}),
+    ])
+
+
+def build_ask():
+    """
+    The conversational one: Siri asks what you want, the agent answers.
+
+    Three actions, wired by UUID. The spoken text goes to the script on
+    stdin, and the script passes --session, so a follow-up in the same
+    minute still knows what you were talking about.
+    """
+    ask_uid = str(uuid.uuid4()).upper()
+    shell_uid = str(uuid.uuid4()).upper()
+    return _envelope([
+        action("is.workflow.actions.ask",
+               {"WFAskActionPrompt": "What do you want to know?",
+                "WFInputType": "Text"},
+               uid=ask_uid),
+        action("is.workflow.actions.runshellscript",
+               {"Script": _guarded(ASK_RUNNER), "Shell": "/bin/zsh",
+                "InputMode": "to stdin", "RunAsAdministrator": False,
+                "Input": output_of(ask_uid, "Provided Input")},
+               uid=shell_uid),
+        action("is.workflow.actions.showresult",
+               {"Text": output_of(shell_uid, "Shell Script Result")}),
+    ])
 
 
 def _quote(path):
     return "'" + str(path).replace("'", "'\\''") + "'"
 
 
-def main():
-    if not RUNNER.exists():
-        print(f"Missing {RUNNER}. Run from the project, with shortcuts/ intact.",
-              file=sys.stderr)
-        return 1
-
+def _sign(workflow, out):
+    """Write and sign one shortcut. Returns True on success."""
     # The signing tool identifies the input by extension: a .plist suffix is
     # rejected with "isn't in the correct format" no matter the contents. It
     # must end in .shortcut.
     unsigned = PROJECT / ".unsigned.shortcut"
-    unsigned.write_bytes(plistlib.dumps(build()))
-
+    unsigned.write_bytes(plistlib.dumps(workflow))
     result = subprocess.run(
         ["shortcuts", "sign", "--mode", "anyone",
-         "-i", str(unsigned), "-o", str(OUT)],
+         "-i", str(unsigned), "-o", str(out)],
         capture_output=True, text=True, check=False,
     )
     unsigned.unlink(missing_ok=True)
 
     if result.returncode != 0:
-        print("Could not sign the shortcut.", file=sys.stderr)
+        print(f"Could not sign {out.name}.", file=sys.stderr)
         print(result.stderr.strip(), file=sys.stderr)
-        print("\nBuild it by hand instead — see shortcuts/README.md.",
-              file=sys.stderr)
-        return 1
+        return False
+    return True
 
-    print(f"Created: {OUT.name}\n")
-    print("Install it (opens Shortcuts, then click Add Shortcut):")
-    print(f"  open {_quote(OUT)}\n")
-    print(f'Then say:  "Hey Siri, {NAME}"')
-    print("\nThe shortcut embeds this folder's path, so regenerate it if you "
-          "move the project.")
+
+def main():
+    for runner in (RUNNER, ASK_RUNNER):
+        if not runner.exists():
+            print(f"Missing {runner}. Run from the project, shortcuts/ intact.",
+                  file=sys.stderr)
+            return 1
+        runner.chmod(0o755)   # Shortcuts will not run a non-executable script
+
+    built = []
+    for workflow, out, name in ((build(), OUT, NAME),
+                                (build_ask(), ASK_OUT, ASK_NAME)):
+        if not _sign(workflow, out):
+            print("\nBuild it by hand instead — see shortcuts/README.md.",
+                  file=sys.stderr)
+            return 1
+        built.append((out, name))
+
+    print("Created two shortcuts:\n")
+    print(f"  {NAME:16}  today's summary, no question asked")
+    print(f"  {ASK_NAME:16}  asks what you want, then answers\n")
+    print("Install both (each opens Shortcuts — click Add Shortcut):")
+    for out, _ in built:
+        print(f"  open {_quote(out)}")
+    print(f'\nThen say:  "Hey Siri, {NAME}"')
+    print(f'           "Hey Siri, {ASK_NAME}"  ->  "any interviews this week?"')
+    print("\nThey embed this folder's path, so regenerate if you move it.")
     return 0
 
 
