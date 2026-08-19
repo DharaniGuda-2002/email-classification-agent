@@ -48,8 +48,7 @@ def main():
     # Set the custom icon on the .command file (macOS only)
     if ICON.exists():
         try:
-            subprocess.run(["osascript", "-e",
-                          f'tell application "Finder" to set icon of (POSIX file "{OUT}") to (POSIX file "{ICON}")'],
+            subprocess.run(["fileicon", "set", str(OUT), str(ICON)],
                           check=False, capture_output=True)
         except (OSError, subprocess.SubprocessError):
             pass
