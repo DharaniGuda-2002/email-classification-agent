@@ -1,7 +1,8 @@
 # inbox-triage
 
-A local LLM triages your Gmail. Read-only, runs entirely on your machine, no
-email content leaves it.
+A local LLM triages your Gmail. Runs entirely on your machine, no email
+content leaves it. It marks the mail you've seen as read — unless it's
+important.
 
 Built for a student job hunt — it separates **rejections** from things that
 actually **need a reply**, so a "Thanks for your interest" doesn't sit in the
@@ -88,8 +89,16 @@ One command for everything:
 ./mail brief              # one short summary, fast
 ./mail once "any interviews?"   # a single question, then exit
 ./mail log                # what Siri asked and answered
+./mail desktop            # put a double-clickable launcher on the Desktop
 ./mail help               # every command
 ```
+
+`./mail` opens a colored, readline-enabled terminal chat — arrow keys scroll
+back through what you typed, and a status line ("Reading your inbox…") shows
+what it is doing while the model works. Prefer an app to click? `./mail
+desktop` drops a **Mail Agent.command** launcher on your Desktop that opens
+the chat in a Terminal window (re-run it if you move the folder). Colours turn
+off automatically when output is piped, so Siri and cron never see them.
 
 Ask it anything:
 
@@ -127,6 +136,24 @@ never trigger them:
 | `3 is a rejection` | teaches it a tag it got wrong |
 | `new` | forget the conversation and start over |
 | `help` | shows the banner again |
+
+The same applies to scheduling (see [A daily digest](#a-daily-digest)) — these
+are parsed in code, not sent to the model:
+
+| command | does |
+|---|---|
+| `check every 2 hours` | install a launchd job on that interval |
+| `schedule every 30 minutes` | same, any plain-English interval (`h`, `m`, `mins`) |
+| `status` | show the current schedule |
+| `stop` / `cancel checking` | remove the launchd job |
+
+### It marks what you've seen as read
+
+After each summary, the mail it showed is marked **read** in Gmail — so it
+stops reappearing the next day. Except the mail that matters: anything tagged
+needs-a-reply, or rated HIGH priority, stays **unread** so it still stands
+out. Rejections, confirmations and noise are marked read. Set
+`MARK_READ=false` in `.env` and the agent is strictly read-only again.
 
 ### Asking Siri
 
@@ -183,7 +210,20 @@ machine before relying on it.
 
 ### A daily digest
 
-`--once` prints and exits, so cron works:
+**From chat or voice** — just say it and the schedule is set:
+
+- "check every 2 hours"
+- "schedule every 30 minutes"
+- "check every 4h"
+- "status" — what's the current schedule?
+- "stop" / "cancel checking" — turn it off
+
+This uses macOS **launchd** (a LaunchAgent) rather than cron: it survives
+reboots, and a Mac that was asleep at the appointed minute still runs the job
+when it wakes. The job fires `./mail brief --notify`, which checks your inbox
+and raises a macOS notification if anything needs a reply.
+
+**By hand** — `--once` prints and exits, so cron works too:
 
 ```bash
 0 8 * * * cd /path/to/inbox-triage && ./run.sh --once >> ~/triage.log 2>&1
@@ -282,6 +322,8 @@ Everything optional lives in `.env`:
 | `LM_BASE_URL` | `http://localhost:1234/v1` | LM Studio server |
 | `MAX_EMAILS` | `50` | ceiling per call |
 | `CORRECTIONS_FILE` | `.corrections.json` | where corrections live |
+| `SPAM_FOLDER` | `[Gmail]/Spam` | where the mailbox keeps spam (non-Gmail only) |
+| `MARK_READ` | `true` | mark summarized mail as read; `false` keeps the agent strictly read-only |
 
 ### How far back
 
@@ -303,8 +345,10 @@ dropped — so a summary never quietly implies it covered everything.
 
 ## Privacy and safety
 
-- **Read-only, structurally.** `readonly=True` and `BODY.PEEK` mean the agent
-  cannot mark mail as read, let alone change it.
+- **Read-only, structurally — with one deliberate write.** `BODY.PEEK` means
+  fetching never sets `\Seen`, and the agent can't send, delete, or modify
+  anything. The single exception: mail it summarizes is marked read unless it
+  needs a reply or is HIGH priority. `MARK_READ=false` turns even that off.
 - **Nothing leaves your machine.** IMAP to your provider, HTTP to localhost.
   No third-party API, no telemetry.
 - **Email content is treated as hostile.** Bodies are fenced in
@@ -338,7 +382,7 @@ test with no model involved.
 ./run.sh --test
 ```
 
-51 tests, no network or mailbox required. Most are regressions — each one is
+133 tests, no network or mailbox required. Most are regressions — each one is
 a bug that shipped and was only caught by running against a real inbox:
 
 - `re.VERBOSE` strips literal spaces, so `other candidates` compiled as
@@ -348,6 +392,13 @@ a bug that shipped and was only caught by running against a real inbox:
 - HTML mislabelled as `text/plain` ate the snippet budget before reaching the
   sentence that mattered
 - `no_reply@` with an underscore slipped past the role-address check
+
+---
+
+## Documentation
+
+Every feature, how the pieces fit together (with flowcharts), the tasks it
+can do, and how to use them is in **[FEATURES.md](FEATURES.md)**.
 
 ---
 

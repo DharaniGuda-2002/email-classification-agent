@@ -23,3 +23,6 @@ siri.log
 
 # Conversation memory (contains your questions and email details)
 .sessions/
+
+# Scheduled-run log (scheduler.py)
+schedule.log

@@ -1,5 +1,6 @@
 """
-Tool-calling agent over a local model. Reads email. That is all it can do.
+Tool-calling agent over a local model. Reads email and marks what you've
+seen as read. That is all it can do.
 
 There is no run_shell, no file access, no send/delete. Not as a policy the
 model is asked to follow — those tools simply do not exist in this process.
@@ -16,15 +17,49 @@ import requests
 from dotenv import load_dotenv
 
 import email_tool
+import scheduler
 import session
+import ui
 from email_tool import (read_emails, read_email_body, DEFAULT_LIMIT,
                         HARD_LIMIT, DEFAULT_DAYS, SOFT_MAX_DAYS)
+
+# Arrow-key history and editing in the chat prompt. Optional: without it the
+# loop still works, just without a scroll-back buffer.
+try:
+    import readline
+except ImportError:
+    readline = None
 
 load_dotenv()
 
 # Siri runs headless — a Show Result card that comes up blank leaves no trace
 # of what the script asked or answered. This file is that trace.
 SIRI_LOG = Path(__file__).resolve().parent / "siri.log"
+
+# Per-prompt history lives with the conversations, so it is gitignored with
+# them (`.sessions/`).
+HISTORY_FILE = Path(__file__).resolve().parent / ".sessions" / "history"
+
+
+def _load_history():
+    """Replay past prompts so ↑ scrolls through them. Best effort."""
+    if readline is None:
+        return
+    try:
+        readline.read_history_file(HISTORY_FILE)
+    except OSError:
+        pass
+
+
+def _save_history():
+    """Remember prompts for the next session. Best effort."""
+    if readline is None:
+        return
+    try:
+        HISTORY_FILE.parent.mkdir(exist_ok=True)
+        readline.write_history_file(HISTORY_FILE)
+    except OSError:
+        pass
 
 
 def siri_log(line):
@@ -37,8 +72,15 @@ def siri_log(line):
         pass
 
 
-LM_BASE_URL = os.environ.get("LM_BASE_URL", "http://localhost:1234/v1").rstrip("/")
-MODEL = os.environ.get("MODEL")
+def _env_str(name, default=""):
+    """Read env var, strip inline comments and whitespace."""
+    raw = os.environ.get(name, default)
+    if raw:
+        raw = raw.split("#")[0].strip()
+    return raw
+
+LM_BASE_URL = _env_str("LM_BASE_URL", "http://localhost:1234/v1").rstrip("/")
+MODEL = _env_str("MODEL")
 ENDPOINT = f"{LM_BASE_URL}/chat/completions"
 
 MAX_STEPS = 10        # small models loop; this is the stop
@@ -250,27 +292,41 @@ def _show_links(important_only=True):
     """Print code-built Gmail links for whatever the last listing held."""
     block = email_tool.links(important_only=important_only)
     if block:
-        print(block, "\n")
+        # Secondary information: printed dim so it reads as a footnote under
+        # the answer rather than as part of it.
+        print(ui.dim(block))
+        print()
 
 
-BANNER = """
-  Inbox triage — read-only. Ctrl-C or 'quit' to leave.
+def _cmd(name, desc):
+    """One line of the command list: a colored name, padded, then its hint."""
+    return f"  {ui.cyan(name.ljust(19))}{ui.dim(desc)}"
 
-  ask:  what needs my attention?
-        summarize my unread mail
-        anything in promotions worth keeping?
-        what came in the last 3 days?
 
-  links               Gmail links for everything in the last listing
-  3 is a rejection    teach it a tag it got wrong
-  help                show this again
-"""
+BANNER = "\n" + "\n".join([
+    ui.cyan(ui.bold("📬  Inbox triage"))
+    + ui.dim("  — marks what you've seen as read · important mail stays "
+             "unread · Ctrl-C or 'quit' to leave"),
+    "",
+    ui.bold("Try asking:"),
+    ui.dim("  what needs my attention?"),
+    ui.dim("  summarize my unread mail"),
+    ui.dim("  anything in promotions worth keeping?"),
+    ui.dim("  what came in the last 3 days?"),
+    "",
+    ui.bold("Commands:"),
+    _cmd("links", "Gmail links for the last listing"),
+    _cmd("3 is a rejection", "teach it a tag it got wrong"),
+    _cmd("new", "start a fresh conversation"),
+    _cmd("help", "show this again"),
+    "",
+]) + "\n"
 
 TRIAGE = ("Triage my unread mail. Include snippets so you can summarize, "
           "and group by what needs attention.")
 
 
-def ask(instruction, session_name="", days=DEFAULT_DAYS):
+def ask(instruction, session_name="", days=DEFAULT_DAYS, status="thinking…"):
     """
     One instruction, start to finish. Returns the reply as text.
 
@@ -278,21 +334,30 @@ def ask(instruction, session_name="", days=DEFAULT_DAYS):
     behaves the same however it arrives. With a session name, earlier turns
     are loaded first and the result saved, which is what makes "what about
     the last three days?" resolve against the answer before it.
+
+    `status` is what the chat shows while local inference runs; the line is
+    erased before the reply prints, and nothing is shown on a piped run.
     """
     messages = session.load(session_name)
     if not messages:
         messages = [{"role": "system", "content": SYSTEM}]
     messages.append({"role": "user", "content": instruction})
 
-    reply = call_model(messages)
+    token = ui.thinking(status)
+    try:
+        reply = call_model(messages)
+    finally:
+        ui.done_thinking(token)
     session.save(session_name, messages)
     return reply
 
 
 def triage(days=DEFAULT_DAYS, session_name=""):
     """One pass: read the inbox, print the summary and the links. No prompt."""
-    reply = ask(f"{TRIAGE} Cover the last {days} day(s).", session_name, days)
-    print(reply, "\n")
+    reply = ask(f"{TRIAGE} Cover the last {days} day(s).", session_name, days,
+                status="Reading your inbox…")
+    print(reply)
+    print()
     _show_links()
     return reply
 
@@ -323,6 +388,7 @@ def main(argv=None):
     if "--help" in argv or "-h" in argv:
         print(__doc__)
         print("  --brief          one short summary, no model prose (for Siri)")
+        print("  --notify         send macOS notification after brief (for launchd)")
         print('  --once "..."     one instruction, no chat (Siri and cron)')
         print("  --session NAME   remember the conversation between runs")
         print("  --days N         how far back to look, default 1")
@@ -331,15 +397,20 @@ def main(argv=None):
     # Plain text, no banner, no colour, no model loop — whatever shows this
     # should not have to strip anything or wait a minute for it.
     if "--brief" in argv:
-        siri_log(f"ASK   check emails (days={days})")
+        notify = "--notify" in argv
+        siri_log(f"ASK   check emails (days={days}, notify={notify})")
         try:
             reply = email_tool.brief(days=days)
         except Exception as exc:
             siri_log(f"ERROR {type(exc).__name__}: {exc}")
             print("Could not check your email.")
+            if notify:
+                scheduler.notify("Mail check failed", "Could not reach your inbox")
             return
         siri_log(f"REPLY {reply!r}")
         print(reply)
+        if notify:
+            scheduler.notify("Mail digest", reply)
         return
 
     if "--once" in argv:
@@ -349,6 +420,25 @@ def main(argv=None):
                  if not a.startswith("--")
                  and a not in (session_name, str(days))]
         instruction = " ".join(words).strip()
+
+        # Scheduling intents — handled in code, not by the model.
+        if scheduler.STATUS_RE.match(instruction):
+            reply = scheduler.status()
+            print(reply)
+            siri_log(f"REPLY {reply!r}")
+            return
+        if scheduler.STOP_RE.match(instruction):
+            reply = scheduler.unschedule()
+            print(reply)
+            siri_log(f"REPLY {reply!r}")
+            return
+        hours = scheduler.parse_interval(instruction)
+        if hours is not None:
+            reply = scheduler.schedule(hours)
+            print(reply)
+            siri_log(f"REPLY {reply!r}")
+            return
+
         siri_log(f"ASK   {instruction or '<triage>'!r}  session={session_name or '-'}")
         try:
             if instruction:
@@ -364,23 +454,31 @@ def main(argv=None):
         return
 
     print(BANNER)
-    print("Reading your inbox...\n")
-    triage(days, session_name)
+    # run.sh checks the model before starting, but the server can drop while
+    # we are here. Fail soft: tell them, and still let them type.
+    try:
+        triage(days, session_name)
+    except Exception as exc:
+        print(ui.red(f"\n{exc}\n"))
+        print(ui.dim("You can still type — but check LM Studio is running "
+                     "before expecting answers."))
 
+    _load_history()
     while True:
         try:
-            user = input("You: ").strip()
+            user = input(ui.bold("You: ")).strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            print(ui.dim("\nBye — see you next time."))
             break
         if user.lower() in ("quit", "exit"):
+            print(ui.dim("Bye — see you next time."))
             break
         if not user:
             continue
 
         if user.lower() in ("new", "start over", "reset"):
             session.clear(session_name)
-            print("\nStarting fresh.\n")
+            print(ui.green("\nStarting fresh.\n"))
             continue
 
         # Handled here rather than as a model tool. A correction is the user
@@ -388,7 +486,9 @@ def main(argv=None):
         # paraphrased, ignored, or triggered by email text.
         fix = CORRECT_RE.match(user)
         if fix:
-            print("\n" + email_tool.correct(fix.group(1), fix.group(2)) + "\n")
+            msg = email_tool.correct(fix.group(1), fix.group(2))
+            tint = ui.red if msg.startswith("ERROR") else ui.green
+            print("\n" + tint(msg) + "\n")
             continue
 
         if user.lower() in ("links", "link"):
@@ -400,8 +500,30 @@ def main(argv=None):
             print(BANNER)
             continue
 
-        print("\nAgent:", ask(user, session_name, days), "\n")
+        # Scheduling intents — handled in code, not by the model.
+        # "check every 2 hours", "schedule every 30 minutes", "stop checking"
+        if scheduler.STATUS_RE.match(user):
+            print(ui.cyan(scheduler.status()))
+            continue
+        if scheduler.STOP_RE.match(user):
+            print(ui.green(scheduler.unschedule()))
+            continue
+        hours = scheduler.parse_interval(user)
+        if hours is not None:
+            print(ui.green(scheduler.schedule(hours)))
+            continue
+
+        # The status line shown by ask() is erased before this prints, so the
+        # answer lands in the spot the "thinking…" occupied.
+        try:
+            reply = ask(user, session_name, days)
+        except Exception as exc:
+            print(ui.red(f"\n{exc}\n"))
+            continue
+        print(f"{ui.cyan(ui.bold('Agent:'))} {reply}\n")
         _show_links()
+
+    _save_history()
 
 
 if __name__ == "__main__":

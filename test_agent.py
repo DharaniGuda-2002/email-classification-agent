@@ -18,6 +18,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import email_tool as t
+import scheduler
 
 PASS, FAIL = [], []
 
@@ -283,6 +284,131 @@ def test_fetch_map():
           got[b"1"][1] == b"b1" and got[b"2"][1] == b"b2", str(got))
 
 
+# ------------------------------------------------------------- invalidation
+
+def test_listing_invalidation():
+    print("\nlisting invalidation")
+    # A listing that fails or comes back empty must not leave the previous
+    # listing's numbers and links live: `brief` reads _LAST_RECORDS, so a
+    # stale cache would report yesterday's mail as today's.
+    original = t._connect
+
+    def boom(*a, **k):
+        raise RuntimeError("no mailbox")
+
+    t._LAST_FETCH.update({1: b"1"})
+    t._LAST_RECORDS.update({1: {"kind": "action"}})
+    try:
+        t._connect = boom
+        try:
+            t.read_emails()
+        except RuntimeError:
+            pass
+        check("failed listing clears old numbers", t._LAST_FETCH == {})
+        check("failed listing clears old records", t._LAST_RECORDS == {})
+    finally:
+        t._connect = original
+
+
+# ------------------------------------------------------------------ mark read
+
+def test_mark_read_selection():
+    print("\nmark-read selection")
+    # The one deliberate write: what you've seen is marked read, except mail
+    # that needs a reply ([action]) or is HIGH priority — that stays unread
+    # so it still needs you.
+    emails = [
+        {"uid": "1", "kind": "action", "priority": "HIGH"},       # needs a reply
+        {"uid": "2", "kind": "rejection", "priority": "NORMAL"},  # nothing to do
+        {"uid": "3", "kind": "confirmation", "priority": "LOW"},  # nothing to do
+        {"uid": "4", "kind": "", "priority": "HIGH"},             # important
+        {"uid": "5", "kind": "", "priority": "NORMAL"},           # nothing to do
+        {"uid": "6", "kind": "action", "priority": "NORMAL"},     # needs a reply
+    ]
+    selected = t._readable_ids(emails)
+    check("action stays unread", "1" not in selected and "6" not in selected)
+    check("high priority stays unread", "4" not in selected)
+    check("the rest are marked read", selected == ["2", "3", "5"], selected)
+
+
+def test_mark_read_store():
+    print("\nmark-read store")
+
+    class FakeIMAP:
+        def __init__(self):
+            self.stored = None
+
+        def uid(self, command, message_set, *flags):
+            self.stored = (command, message_set, flags)
+            return ("OK", [])
+
+        def logout(self):
+            pass
+
+    original = t._connect
+    try:
+        fake = FakeIMAP()
+        seen = {}
+
+        def fake_connect(folder="INBOX", readonly=True):
+            seen["readonly"] = readonly
+            return fake
+
+        t._connect = fake_connect
+        t.mark_read(["1", "2", "3"], "INBOX")
+        check("stores exactly the given uids", fake.stored[1] == b"1,2,3",
+              str(fake.stored[1]))
+        check("adds the seen flag",
+              fake.stored == ("STORE", b"1,2,3", ("+FLAGS", r"(\Seen)")),
+              str(fake.stored))
+        check("opens a writable session", seen.get("readonly") is False)
+    finally:
+        t._connect = original
+
+    empty = FakeIMAP()
+    t._connect = lambda folder="INBOX", readonly=True: empty
+    t.mark_read([], "INBOX")
+    check("empty list issues no store", empty.stored is None)
+    t._connect = original
+
+    def boom(*a, **k):
+        raise RuntimeError("no mailbox")
+
+    t._connect = boom
+    try:
+        t.mark_read([b"1"], "INBOX")
+        check("failed mark-read is swallowed, not raised", True)
+    finally:
+        t._connect = original
+
+
+def test_mark_read_disabled():
+    print("\nmark-read toggle")
+    # MARK_READ=false restores strict read-only: no store is ever issued.
+    old, t.MARK_READ = t.MARK_READ, False
+
+    class FakeIMAP:
+        def __init__(self):
+            self.stored = False
+
+        def uid(self, *a):
+            self.stored = True
+            return ("OK", [])
+
+        def logout(self):
+            pass
+
+    original = t._connect
+    try:
+        fresh = FakeIMAP()
+        t._connect = lambda folder="INBOX", readonly=True: fresh
+        t.mark_read([b"1"], "INBOX")
+        check("MARK_READ=false issues no store", fresh.stored is False)
+    finally:
+        t._connect = original
+        t.MARK_READ = old
+
+
 # --------------------------------------------------------------------- urls
 
 def test_gmail_links():
@@ -294,6 +420,10 @@ def test_gmail_links():
     check("keys the account by address", "/mail/u/" in url)
     check("no thread id means no link", t._gmail_url("1 (BODY[HEADER] {5}") == "")
     check("empty prefix means no link", t._gmail_url("") == "")
+    # mark_read and read_email_body address by UID, so this parse must not drift.
+    check("extracts the uid", t._uid("1 (UID 34 X-GM-THRID 1 X-GM-LABELS ())") == "34")
+    check("no uid means none", t._uid("1 (BODY[HEADER] {5}") == "")
+    check("empty prefix means no uid", t._uid("") == "")
 
 
 # ------------------------------------------------------------------- config
@@ -404,13 +534,43 @@ def test_config():
         check(f"is a correction: {text}", bool(agent.CORRECT_RE.match(text)))
 
 
+def test_scheduler():
+    print("\nscheduler")
+    # Interval parsing from plain English. "every hour" with no number means
+    # one hour; the unit alone carries the meaning.
+    check("every 2 hours -> 2.0", scheduler.parse_interval("check every 2 hours") == 2.0)
+    check("every 30 minutes -> 0.5", scheduler.parse_interval("every 30 minutes") == 0.5)
+    check("run every 4h -> 4.0", scheduler.parse_interval("run every 4h") == 4.0)
+    check("every hour -> 1.0", scheduler.parse_interval("every hour") == 1.0)
+
+    # Nothing matching "every" must stay None, never a guessed default.
+    # A misread would silently schedule a job the user never asked for.
+    check("'status' is not an interval", scheduler.parse_interval("status") is None)
+    check("'check my email' is not an interval",
+          scheduler.parse_interval("check my email") is None)
+
+    # Clamping: below 15 min is a busy loop; above 24 h is out of scope.
+    check("15 min is the floor", scheduler.parse_interval("every 5 minutes") == 0.25)
+    check("24 h is the ceiling", scheduler.parse_interval("every 48 hours") == 24.0)
+
+    # Intents are detected in code, not by the model.
+    check("'status' matches STATUS_RE", bool(scheduler.STATUS_RE.match("status")))
+    check("'stop checking' matches STOP_RE", bool(scheduler.STOP_RE.match("stop checking")))
+    check("bare 'stop' matches STOP_RE", bool(scheduler.STOP_RE.match("stop")))
+    check("'check every 2 hours' is not a stop",
+          not scheduler.STOP_RE.match("check every 2 hours"))
+
+
 if __name__ == "__main__":
     print("Running tests — no network, no mailbox, no model.")
     for fn in (test_rejections, test_actions, test_sender_classification,
                test_body_extraction, test_hostile_input, test_clean,
                test_kind, test_priority, test_sender_name,
                test_siri_log, test_session, test_window, test_selection,
-               test_fetch_map, test_gmail_links, test_config):
+               test_fetch_map, test_listing_invalidation,
+               test_mark_read_selection, test_mark_read_store,
+               test_mark_read_disabled,
+               test_gmail_links, test_config, test_scheduler):
         fn()
 
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

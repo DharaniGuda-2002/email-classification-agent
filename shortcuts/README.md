@@ -1,12 +1,17 @@
 # Asking Siri to check your email
 
-"Hey Siri, Check My Emails" → it runs the agent and reads a one-line summary
-aloud:
+"Hey Siri, Check My Emails" → it runs the agent and shows today's summary on
+screen (Siri reads the card aloud as it appears):
 
-> "50 new emails. 3 need a reply: Brex, Guidehouse, Axle. 3 rejections:
-> Walker, Guidehouse, Claritev. 11 applications acknowledged. 33 others."
+> 26 new emails today.
+>
+> Needs a reply (1):
+> • Acme — Interview Thursday
+>
+> Rejections (2): grifols, newsela
+> 12 applications acknowledged.
 
-Siri waits for the model to finish, then speaks the real result — about 20
+Siri waits for the model to finish, then shows the real result — about 20
 seconds. Everything runs on your Mac.
 
 ---
@@ -44,8 +49,10 @@ The shortcut embeds this project's path, so if you move the folder, run
 ### What it contains
 
 Two actions: **Run Shell Script** (runs `shortcuts/check-emails.sh`, which
-does `run.sh --brief`) and **Speak Text** (reads the result). The shell action
-blocks until the model replies, which is why Siri waits for the real answer.
+does `run.sh --brief`) and **Show Result** (displays the reply on screen). The
+shell action blocks until the model replies, which is why Siri waits for the
+real answer. The conversational shortcut ("Ask My Email") is three actions —
+Ask for Input, Run Shell Script, Show Result — so Siri can take your question.
 
 ---
 
@@ -106,7 +113,7 @@ but the model didn't answer in time.
 | "Could not check your email" | agent failed to start — run `./run.sh --check` |
 | silence | Run Shell Script path is wrong, or Shortcuts lacks Full Disk Access |
 | Siri opens the app instead of running | name collides — rename the shortcut |
-| nothing spoken | the Speak Text action lost its input; regenerate |
+| nothing shows | the Show Result action lost its input; regenerate |
 
 ---
 
@@ -119,7 +126,7 @@ shortcut named **Check My Emails**, two actions:
    ```
    /Users/you/Desktop/agent/shortcuts/check-emails.sh
    ```
-2. **Speak Text** — input set to **Shell Script Result**.
+2. **Show Result** — input set to **Shell Script Result**.
 
 ---
 

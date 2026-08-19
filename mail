@@ -35,9 +35,16 @@ usage() {
   printf '    %-20s %s\n' "log"       "What Siri asked and answered"
   printf '\n'
 
+  printf '  %sSchedule (in chat or with once)%s\n' "$B" "$R"
+  printf '    %-20s %s\n' '"check every 2h"' "Run on a schedule (launchd)"
+  printf '    %-20s %s\n' '"status"'    "Show current schedule"
+  printf '    %-20s %s\n' '"stop"'      "Cancel the schedule"
+  printf '\n'
+
   printf '  %sSet up (run once)%s\n' "$B" "$R"
   printf '    %-20s %s\n' "shortcut"  "Build the Siri shortcut, then install it"
-  printf '    %s%s%s\n\n' "$D" "Re-run shortcut if you move this folder." "$R"
+  printf '    %-20s %s\n' "desktop"   "Put a double-clickable chat launcher on the Desktop"
+  printf '    %s%s%s\n\n' "$D" "Re-run if you move this folder." "$R"
 
   printf '  %sMaintenance%s\n' "$B" "$R"
   printf '    %-20s %s\n' "check"     "Preflight: venv, .env, mailbox, model"
@@ -58,6 +65,7 @@ case "$cmd" in
   brief)           exec ./run.sh --brief "$@" ;;
   once)            exec ./run.sh --once "$@" ;;
   shortcut)        exec ./run.sh --shortcut ;;
+  desktop)         exec ./run.sh --desktop ;;
   test)            exec ./run.sh --test ;;
   check)           exec ./run.sh --check ;;
   log)

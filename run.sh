@@ -20,7 +20,9 @@ PY=.venv/bin/python
 # Generate and offer to install the Siri shortcut. Needs no preflight, so it
 # runs before the checks — you can build the shortcut without a model loaded.
 if [ "${1:-}" = "--shortcut" ]; then
-    "$PY" shortcuts/make_shortcut.py || exit 1
+    # make_shortcut.py is stdlib-only, and on a fresh clone .venv does not
+    # exist yet — this branch runs before the venv step on purpose.
+    python3 shortcuts/make_shortcut.py || exit 1
     printf '\nOpen them now to install? [y/N] '
     read -r reply
     if [ "$reply" = "y" ] || [ "$reply" = "Y" ]; then
@@ -31,6 +33,13 @@ if [ "${1:-}" = "--shortcut" ]; then
         read -r _
         open "Ask My Email.shortcut"
     fi
+    exit 0
+fi
+
+# Same rules as --shortcut: no venv, no mailbox, no model. The launcher is
+# useful before the mailbox even works.
+if [ "${1:-}" = "--desktop" ]; then
+    python3 shortcuts/make_launcher.py || exit 1
     exit 0
 fi
 

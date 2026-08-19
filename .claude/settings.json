@@ -1,0 +1,7 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:20128",
+    "ANTHROPIC_AUTH_TOKEN": "dummy",
+        "ANTHROPIC_MODEL": "auto/best-coding-fast"
+  }
+}

@@ -16,6 +16,7 @@ macOS only — the Run Shell Script action does not exist in Shortcuts on
 iPhone, and the script needs this Mac's Python, LM Studio and credentials.
 """
 
+import base64
 import plistlib
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 RUNNER = PROJECT / "shortcuts" / "check-emails.sh"
 ASK_RUNNER = PROJECT / "shortcuts" / "ask-email.sh"
+ICON = PROJECT / "assets" / "MailAgent.icns"
 
 NAME = "Check My Emails"          # fixed summary
 ASK_NAME = "Ask My Email"         # conversational
@@ -69,13 +71,29 @@ def _guarded(runner):
 
 
 def _envelope(actions):
+    # Embed the custom MailAgent icon (ICNS -> base64 PNG data for shortcuts)
+    icon_data = ""
+    if ICON.exists():
+        try:
+            icon_data = base64.b64encode(ICON.read_bytes()).decode()
+        except OSError:
+            pass
+
+    icon_dict = {}
+    if icon_data:
+        # shortcuts format: base64-encoded ICNS under WFWorkflowIconData
+        icon_dict = {"WFWorkflowIconData": icon_data}
+    else:
+        # Fallback: system glyph
+        icon_dict = {"WFWorkflowIconStartColor": 946986751,
+                     "WFWorkflowIconGlyphNumber": 61440}
+
     return {
         "WFWorkflowClientVersion": "2038.1.3",
         "WFWorkflowMinimumClientVersion": 900,
         "WFWorkflowMinimumClientVersionString": "900",
         "WFWorkflowHasShortcutInputVariables": False,
-        "WFWorkflowIcon": {"WFWorkflowIconStartColor": 946986751,
-                           "WFWorkflowIconGlyphNumber": 61440},
+        "WFWorkflowIcon": icon_dict,
         "WFWorkflowImportQuestions": [],
         "WFWorkflowTypes": ["NCWidget"],
         "WFWorkflowInputContentItemClasses": ["WFStringContentItem"],

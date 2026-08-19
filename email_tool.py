@@ -12,7 +12,10 @@ would be slower and worse.
 Priority is a *hint* computed from headers — factual signals only. Ranking
 is the model's job; this just gives it something true to rank on.
 
-Reading never mutates the inbox: readonly=True + BODY.PEEK.
+Reading is non-mutating: BODY.PEEK fetches never set the seen flag. The one
+deliberate write is mark_read() — mail the agent summarizes is marked read
+unless it is important (needs a reply, or HIGH priority). MARK_READ=false
+in .env turns that off.
 """
 
 import email
@@ -32,7 +35,16 @@ import classifier
 
 load_dotenv()
 
-IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
+
+def _env_str(name, default=""):
+    """Read env var, stripping inline comments so `host # note` stays valid."""
+    raw = os.environ.get(name, default)
+    if raw:
+        raw = raw.split("#")[0].strip()
+    return raw
+
+
+IMAP_HOST = _env_str("IMAP_HOST", "imap.gmail.com")
 
 MAX_BODY_CHARS = 1500
 SNIPPET_CHARS = 300   # enough to summarize from, short enough to batch
@@ -53,6 +65,11 @@ def _env_int(name, default):
 
 
 HARD_LIMIT = _env_int("MAX_EMAILS", 50)
+
+# The escape hatch: marking mail read is the default so what you've seen stops
+# reappearing. MARK_READ=false keeps the agent strictly read-only.
+MARK_READ = os.environ.get("MARK_READ", "true").strip().lower() \
+    not in ("0", "false", "no", "off")
 
 
 # Rolling hours, not calendar days: "1 day" at 9am should not mean nine
@@ -92,6 +109,11 @@ HTML_RE = re.compile(r"<\s*(?:p|div|br|img|table|span|html|body|a)\b", re.I)
 
 # Gmail's own thread id, returned alongside the labels in the same FETCH.
 THRID_RE = re.compile(r"X-GM-THRID\s+(\d+)")
+
+# The stable, per-message id. Sequence numbers shift whenever anything is
+# expunged, so a write issued from a second connection must address by UID —
+# by position it would silently mark the wrong email read.
+UID_RE = re.compile(r"\bUID\s+(\d+)")
 
 # Unambiguous action: an interview, a test, a real ask. These outrank a
 # confirmation — "thanks for applying, now do this assessment" needs a reply.
@@ -159,9 +181,12 @@ KIND_PRIORITY = {"action": "HIGH", "rejection": "NORMAL", "confirmation": "LOW"}
 
 # Gmail's tabs. Not stored in X-GM-LABELS, so they need a search to resolve.
 CATEGORIES = ("promotions", "social", "updates", "forums")
-SPAM_FOLDER = "[Gmail]/Spam"
+# Non-Gmail providers name the folder differently (e.g. Outlook's "Junk").
+SPAM_FOLDER = os.environ.get("SPAM_FOLDER", "[Gmail]/Spam")
 
-# Maps the numbers the model sees (1, 2, 3...) to real IMAP ids.
+# Maps the numbers the model sees (1, 2, 3...) to real IMAP UIDs. UIDs, not
+# sequence numbers: body reads and mark-read reopen the folder, and sequence
+# numbers shift on expunge — by position you'd fetch or mark the wrong mail.
 # Module state because the agent process is single-threaded and short-lived.
 # If that stops being true, this is the first thing that breaks.
 _LAST_FETCH = {}
@@ -330,6 +355,12 @@ def _kind(msg, text, category):
     return ""
 
 
+def _uid(prefix):
+    """Stable message id from a FETCH response line. '' if the server omits it."""
+    match = UID_RE.search(prefix or "")
+    return match.group(1) if match else ""
+
+
 def _gmail_url(prefix):
     """
     Permalink to the original message, from the thread id in a FETCH reply.
@@ -429,9 +460,12 @@ def _extract_body(msg):
 # -------------------------------------------------------------------- edges
 # Network lives here. Config is validated here, not at import.
 
-def _connect(folder="INBOX"):
+def _connect(folder="INBOX", readonly=True):
     """
-    Authenticated, read-only IMAP session on `folder`.
+    Authenticated IMAP session on `folder`. Read-only unless asked otherwise.
+
+    `readonly=False` exists for mark_read(), the one write in the process.
+    Every read path passes the default and stays non-mutating.
 
     Auth is an app password. Not your account password with a 2FA code —
     Google disabled basic auth for Gmail, and IMAP cannot carry an
@@ -448,7 +482,7 @@ def _connect(folder="INBOX"):
 
     m = imaplib.IMAP4_SSL(IMAP_HOST, 993)
     m.login(user, password.replace(" ", ""))  # Gmail rejects the displayed spaces
-    m.select(folder, readonly=True)           # cannot set \Seen, structurally
+    m.select(folder, readonly=readonly)
     return m
 
 
@@ -551,9 +585,9 @@ def _collect(heads, ids, cats, cutoff, category, is_spam):
             continue
 
         cat = "spam" if is_spam else cats.get(msg_id, "primary")
-        out.append({"id": msg_id, "msg": msg, "labels": prefix, "category": cat,
-                    "url": _gmail_url(prefix), "kind": "",
-                    "priority": _priority(msg, prefix, cat)})
+        out.append({"id": msg_id, "uid": _uid(prefix), "msg": msg,
+                    "labels": prefix, "category": cat, "url": _gmail_url(prefix),
+                    "kind": "", "priority": _priority(msg, prefix, cat)})
     return out
 
 
@@ -634,6 +668,7 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
                 f"{', '.join(CATEGORIES)}, primary, spam.")
 
     _LAST_FETCH.clear()
+    _LAST_RECORDS.clear()   # a fresh listing invalidates old numbers and links
     is_spam = category == "spam"
     folder = _LAST_FOLDER = SPAM_FOLDER if is_spam else "INBOX"
     cutoff, since = _window(days)
@@ -648,7 +683,7 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
         # One fetch for every header, not one per email. Headers are needed
         # for the window check, the priority, and the listing alike, so they
         # are pulled once before anything is narrowed.
-        heads = _fetch_map(m, ids, "(BODY.PEEK[HEADER] X-GM-LABELS X-GM-THRID)")
+        heads = _fetch_map(m, ids, "(BODY.PEEK[HEADER] UID X-GM-LABELS X-GM-THRID)")
         cats = {} if is_spam else _category_map(m, ids, days)
 
         emails = _collect(heads, ids, cats, cutoff, category, is_spam)
@@ -674,8 +709,7 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
             snippets.update(_snippets(m, missing))
             _tag([e for e in emails if e["id"] in missing], snippets)
 
-        _LAST_FETCH.update({n: e["id"] for n, e in enumerate(emails, start=1)})
-        _LAST_RECORDS.clear()
+        _LAST_FETCH.update({n: e["uid"] for n, e in enumerate(emails, start=1)})
         _LAST_RECORDS.update({n: {
             "from": _decode(e["msg"]["From"]),
             "subject": _decode(e["msg"]["Subject"]),
@@ -684,6 +718,12 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
             "priority": e["priority"],
             "url": e["url"],
         } for n, e in enumerate(emails, start=1)})
+
+        # The one deliberate write: what you've seen stops reappearing. Mail
+        # that needs a reply, or is HIGH priority, is skipped — it stays
+        # unread so it still needs you. Dropped (never-shown) mail is not
+        # touched either.
+        mark_read(_readable_ids(emails), folder)
 
         head = f"{total} {scope}. Showing {len(emails)}"
         if dropped:
@@ -823,14 +863,14 @@ def read_email_body(number):
     except (TypeError, ValueError):
         return f"ERROR: '{number}' is not a valid email number."
 
-    msg_id = _LAST_FETCH.get(number)
-    if not msg_id:
+    uid = _LAST_FETCH.get(number)
+    if not uid:
         return (f"ERROR: no email #{number} in the current listing. "
                 "Call read_emails first.")
 
     m = _connect(_LAST_FOLDER)  # spam listings live in another folder
     try:
-        _, raw = m.fetch(msg_id, "(BODY.PEEK[])")
+        _, raw = m.uid("FETCH", uid, "(BODY.PEEK[])")
         msg = email.message_from_bytes(raw[0][1])
         content = _extract_body(msg) or "(this email has no readable body)"
         return (
@@ -842,6 +882,42 @@ def read_email_body(number):
         )
     finally:
         m.logout()
+
+
+def _readable_ids(emails):
+    """Stable ids to mark read: shown mail that needs nothing from you."""
+    return [e["uid"] for e in emails
+            if e["kind"] != "action" and e["priority"] != "HIGH"]
+
+
+def mark_read(ids, folder="INBOX"):
+    """
+    Set \\Seen on the given UIDs. Best effort — never raises.
+
+    This is the process's one deliberate write: mail the agent has shown is
+    marked read so it stops reappearing. Important mail (needs a reply, or
+    HIGH priority) is filtered out by the caller and stays unread. A failed
+    flag write must not lose the listing it follows, so failures are logged
+    to stderr and swallowed. Addressed by UID (never sequence number): this
+    reconnects, and sequence numbers shift when anything is expunged — by
+    position it would silently mark the wrong email read.
+    """
+    ids = [i if isinstance(i, bytes) else str(i).encode("ascii")
+           for i in ids if i]
+    if not ids or not MARK_READ:
+        return
+    try:
+        m = _connect(folder, readonly=False)
+        try:
+            typ, _ = m.uid("STORE", b",".join(ids), "+FLAGS", r"(\Seen)")
+            if typ != "OK":
+                print(f"   [warn] Gmail refused to mark {len(ids)} message(s) "
+                      f"read: {typ}", file=sys.stderr)
+        finally:
+            m.logout()
+    except Exception as exc:
+        print(f"   [warn] could not mark {len(ids)} message(s) read: {exc}",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":
