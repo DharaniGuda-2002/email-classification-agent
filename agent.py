@@ -22,7 +22,6 @@ import session
 import ui
 from email_tool import (read_emails, read_email_body, DEFAULT_LIMIT,
                         HARD_LIMIT, DEFAULT_DAYS, SOFT_MAX_DAYS)
-
 # Arrow-key history and editing in the chat prompt. Optional: without it the
 # loop still works, just without a scroll-back buffer.
 try:
@@ -392,6 +391,7 @@ def main(argv=None):
         print('  --once "..."     one instruction, no chat (Siri and cron)')
         print("  --session NAME   remember the conversation between runs")
         print("  --days N         how far back to look, default 1")
+        print("  --check          preflight only, don't start")
         return
 
     # Plain text, no banner, no colour, no model loop — whatever shows this

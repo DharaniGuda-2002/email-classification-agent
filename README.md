@@ -46,12 +46,26 @@ git clone <your-repo-url> && cd inbox-triage
 ./run.sh
 ```
 
-The first run creates `.env` and stops. Fill in three values:
+The first run creates `.env` and stops. Fill in the required values:
 
+**Single account (legacy):**
 ```bash
 EMAIL_USER=you@gmail.com
 EMAIL_PASS=abcdefghijklmnop        # app password, see below
 MODEL=qwen2.5-7b-instruct          # must match the model loaded in LM Studio
+```
+
+**Multiple accounts:**
+```bash
+# If any EMAIL_USER_N / EMAIL_PASS_N pair is set, legacy EMAIL_USER / EMAIL_PASS are ignored
+EMAIL_USER_1=personal@gmail.com
+EMAIL_PASS_1=abcdefghijklmnop
+EMAIL_NAME_1=personal               # optional, shown in output
+
+EMAIL_USER_2=work@company.com
+EMAIL_PASS_2=qrstuvwxyz123456
+EMAIL_NAME_2=work
+EMAIL_HOST_2=imap.gmail.com         # optional, defaults to IMAP_HOST
 ```
 
 Then `./run.sh` again. That's it.
@@ -315,15 +329,19 @@ Everything optional lives in `.env`:
 
 | variable | default | does |
 |---|---|---|
-| `EMAIL_USER` | — | your address |
-| `EMAIL_PASS` | — | app password |
+| `EMAIL_USER` | — | your address (legacy single-account) |
+| `EMAIL_PASS` | — | app password (legacy single-account) |
+| `EMAIL_NAME` | — | friendly name for legacy account |
+| `EMAIL_USER_N` | — | additional accounts (N=1..9): `EMAIL_USER_1`, `EMAIL_PASS_1`, `EMAIL_NAME_1`, `EMAIL_HOST_1` |
 | `MODEL` | — | must match LM Studio exactly |
-| `IMAP_HOST` | `imap.gmail.com` | change for other providers |
+| `IMAP_HOST` | `imap.gmail.com` | default IMAP host for accounts without `EMAIL_HOST_N` |
 | `LM_BASE_URL` | `http://localhost:1234/v1` | LM Studio server |
 | `MAX_EMAILS` | `50` | ceiling per call |
 | `CORRECTIONS_FILE` | `.corrections.json` | where corrections live |
 | `SPAM_FOLDER` | `[Gmail]/Spam` | where the mailbox keeps spam (non-Gmail only) |
 | `MARK_READ` | `true` | mark summarized mail as read; `false` keeps the agent strictly read-only |
+
+**Multi-account mode**: If any `EMAIL_USER_N` / `EMAIL_PASS_N` pair is set, the legacy `EMAIL_USER-ID` / `EMAIL_PASS` are ignored. Each account can have its own IMAP host, so you can mix Gmail and Outlook.
 
 ### How far back
 

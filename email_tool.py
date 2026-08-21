@@ -82,9 +82,45 @@ PRIORITY_RANK = {"HIGH": 0, "NORMAL": 1, "LOW": 2}
 
 TAG_SCAN_MAX = 80
 
+
+def get_accounts():
+    """
+    Return list of configured email accounts from environment.
+
+    Supports two formats:
+    1. Legacy single account: EMAIL_USER, EMAIL_PASS, [EMAIL_NAME], [IMAP_HOST]
+    2. Multi-account: EMAIL_USER_1..9, EMAIL_PASS_1..9, [EMAIL_NAME_1..9], [EMAIL_HOST_1..9]
+
+    If any EMAIL_USER_N is set, the legacy vars are ignored. Each account dict
+    contains: user, pass, name, host. Name defaults to email local-part.
+    Host defaults to global IMAP_HOST.
+    """
+    accounts = []
+
+    # First check numbered accounts (1-9)
+    for i in range(1, 10):
+        user = os.environ.get(f"EMAIL_USER_{i}")
+        password = os.environ.get(f"EMAIL_PASS_{i}")
+        if user and password:
+            name = os.environ.get(f"EMAIL_NAME_{i}") or user.split("@")[0]
+            host = os.environ.get(f"EMAIL_HOST_{i}") or IMAP_HOST
+            accounts.append({"user": user, "pass": password, "name": name, "host": host})
+
+    # Fallback to legacy single-account config
+    if not accounts:
+        user = os.environ.get("EMAIL_USER")
+        password = os.environ.get("EMAIL_PASS")
+        if user and password:
+            name = os.environ.get("EMAIL_NAME") or "default"
+            accounts.append({"user": user, "pass": password, "name": name, "host": IMAP_HOST})
+
+    return accounts
+
+
 # Rejections hide in the body and read as polite, so they are checked before
 # everything else: a rejection usually thanks you for applying too.
 REJECTION_RE = re.compile(r"""
+    # --- Job application rejections ---
     unfortunately
   | regret \s+ to \s+ inform
   | not \s+ moving \s+ forward
@@ -102,6 +138,43 @@ REJECTION_RE = re.compile(r"""
   | (?:was|were) \s+ unsuccessful
   | not \s+ to \s+ move \s+ forward
   | position \s+ has \s+ been \s+ filled
+  | we \s+ have \s+ decided \s+ not \s+ to \s+ proceed
+  | unable \s+ to \s+ offer
+  | not \s+ a \s+ match
+  | not \s+ the \s+ right \s+ fit
+
+    # --- Email delivery failures / bounces ---
+  | undeliverable
+  | delivery \s+ status \s+ notification
+  | delivery \s+ failed
+  | mail \s+ delivery \s+ failed
+  | returned \s+ mail
+  | return \s+ to \s+ sender
+  | mail .{0,20} returned .{0,20} sender
+  | bounced
+  | bounce \s+ message
+  | non.?delivery
+  | could \s+ not \s+ be \s+ delivered
+  | failed \s+ to \s+ deliver
+  | recipient \s+ (?:rejected|unknown|not \s+ found)
+  | mailbox \s+ (?:full|unavailable|not \s+ found)
+  | host \s+ (?:unknown|unreachable)
+  | connection \s+ (?:timed \s+ out|refused)
+  | spam \s+ (?:rejected|blocked)
+  | policy \s+ (?:rejection|violation)
+  | blacklist
+  | greylist
+
+    # --- LinkedIn / job platform rejections ---
+  | linkedin .{0,30} (?:not \s+ selected|unfortunately|rejected|declined)
+  | indeed .{0,30} (?:not \s+ selected|unfortunately|rejected|declined)
+  | glassdoor .{0,30} (?:not \s+ selected|unfortunately|rejected|declined)
+  | ziprecruiter .{0,30} (?:not \s+ selected|unfortunately|rejected|declined)
+  | monster .{0,30} (?:not \s+ selected|unfortunately|rejected|declined)
+  | careerbuilder .{0,30} (?:not \s+ selected|unfortunately|rejected|declined)
+  | your \s+ application \s+ was \s+ (?:not \s+ )?selected
+  | application \s+ (?:status|update): \s* (?:rejected|declined|not \s+ selected)
+  | we \s+ regret \s+ to \s+ inform \s+ you \s+ that \s+ your \s+ application
 """, re.I | re.X)
 
 # Markup that means the body is HTML whatever the Content-Type claims.
@@ -361,22 +434,20 @@ def _uid(prefix):
     return match.group(1) if match else ""
 
 
-def _gmail_url(prefix):
+def _gmail_url(prefix, account_index=0):
     """
     Permalink to the original message, from the thread id in a FETCH reply.
 
-    Gmail's web UI addresses threads by the hex form of X-GM-THRID. The
-    account is keyed by address rather than the usual /u/0/ — with more than
-    one Google account signed in, /u/0/ opens the wrong mailbox.
+    Gmail's web UI addresses threads by the hex form of X-GM-THRID.
+    Multi-account uses numeric indices: /u/0/, /u/1/, etc.
     """
     match = THRID_RE.search(prefix or "")
     if not match:
         return ""
-    user = os.environ.get("EMAIL_USER", "0")
-    return f"https://mail.google.com/mail/u/{user}/#all/{int(match.group(1)):x}"
+    return f"https://mail.google.com/mail/u/{account_index}/#all/{int(match.group(1)):x}"
 
 
-def _priority(msg, labels, category, kind=""):
+def _priority(msg, labels, category, kind="", account_user=None):
     """
     HIGH / NORMAL / LOW from header facts. No judgment, no guessing.
 
@@ -404,7 +475,10 @@ def _priority(msg, labels, category, kind=""):
     # everything is addressed to you, marketing included — it separates
     # nothing. HIGH stays rare enough to mean something: starred, or Gmail
     # judged it important.
-    user = (os.environ.get("EMAIL_USER") or "").lower()
+    if account_user is None:
+        accounts = get_accounts()
+        account_user = accounts[0]["user"] if accounts else ""
+    user = (account_user or "").lower()
     addressed = f"{msg.get('To', '')} {msg.get('Cc', '')}".lower()
     if user and user in addressed:
         return "NORMAL"
@@ -460,7 +534,7 @@ def _extract_body(msg):
 # -------------------------------------------------------------------- edges
 # Network lives here. Config is validated here, not at import.
 
-def _connect(folder="INBOX", readonly=True):
+def _connect(account=None, folder="INBOX", readonly=True):
     """
     Authenticated IMAP session on `folder`. Read-only unless asked otherwise.
 
@@ -471,16 +545,24 @@ def _connect(folder="INBOX", readonly=True):
     Google disabled basic auth for Gmail, and IMAP cannot carry an
     interactive challenge anyway: one LOGIN command, one string, no round
     trip to prompt you on. The app password is the supported stand-in.
-    """
-    user = os.environ.get("EMAIL_USER")
-    password = os.environ.get("EMAIL_PASS")
-    if not user or not password:
-        raise RuntimeError(
-            "EMAIL_USER and EMAIL_PASS must be set. Copy .env.example to .env. "
-            "Generate an app password at myaccount.google.com/apppasswords."
-        )
 
-    m = imaplib.IMAP4_SSL(IMAP_HOST, 993)
+    If account is None, uses the first configured account.
+    """
+    if account is None:
+        accounts = get_accounts()
+        if not accounts:
+            raise RuntimeError(
+                "No email accounts configured. Copy .env.example to .env and set "
+                "EMAIL_USER/EMAIL_PASS or EMAIL_USER_1/EMAIL_PASS_1. "
+                "Generate app passwords at myaccount.google.com/apppasswords."
+            )
+        account = accounts[0]
+
+    user = account["user"]
+    password = account["pass"]
+    host = account.get("host", IMAP_HOST)
+
+    m = imaplib.IMAP4_SSL(host, 993)
     m.login(user, password.replace(" ", ""))  # Gmail rejects the displayed spaces
     m.select(folder, readonly=readonly)
     return m
@@ -560,7 +642,7 @@ def _describe(days, category, unread_only):
     return f"{what}{category or 'inbox'} mail from {window}"
 
 
-def _collect(heads, ids, cats, cutoff, category, is_spam):
+def _collect(heads, ids, cats, cutoff, category, is_spam, account=None, account_index=0):
     """
     Parsed headers -> the email records the rest of the function works on.
 
@@ -572,6 +654,7 @@ def _collect(heads, ids, cats, cutoff, category, is_spam):
     Priority is provisional here; _tag revises it once bodies are read.
     """
     out = []
+    account_user = account["user"] if account else None
     for msg_id in reversed(ids):                 # newest first
         entry = heads.get(msg_id)
         if not entry:
@@ -586,8 +669,8 @@ def _collect(heads, ids, cats, cutoff, category, is_spam):
 
         cat = "spam" if is_spam else cats.get(msg_id, "primary")
         out.append({"id": msg_id, "uid": _uid(prefix), "msg": msg,
-                    "labels": prefix, "category": cat, "url": _gmail_url(prefix),
-                    "kind": "", "priority": _priority(msg, prefix, cat)})
+                    "labels": prefix, "category": cat, "url": _gmail_url(prefix, account_index=account_index),
+                    "kind": "", "priority": _priority(msg, prefix, cat, account_user=account_user)})
     return out
 
 
@@ -634,7 +717,7 @@ def _format(emails, snippets, show_snippets):
 
 def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
                 include_snippets=False, days=DEFAULT_DAYS,
-                max_model_calls=None):
+                max_model_calls=None, account=None):
     """
     List email from a rolling time window, with category and priority.
 
@@ -644,12 +727,18 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
     way, because the [kind] tag needs them — but with this off the model
     sees only tags derived here in code, and none of the stranger-written
     prose they came from. On, it is fenced in untrusted markers.
+    account: specific account dict, or None to check all accounts
 
     Over `limit`, low-priority mail is shed first and the drop is reported.
     """
+    accounts = get_accounts() if account is None else [account]
+    if not accounts:
+        raise RuntimeError("No email accounts configured.")
+
     global _LAST_FOLDER
     print(f"   [tool] read_emails days={days} category={category} "
-          f"snippets={include_snippets}", file=sys.stderr)
+          f"snippets={include_snippets} accounts={[a['name'] for a in accounts]}",
+          file=sys.stderr)
     # The model supplies these. Clamp rather than trust.
     try:
         limit = max(1, min(int(limit), HARD_LIMIT))
@@ -669,70 +758,117 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
 
     _LAST_FETCH.clear()
     _LAST_RECORDS.clear()   # a fresh listing invalidates old numbers and links
-    is_spam = category == "spam"
-    folder = _LAST_FOLDER = SPAM_FOLDER if is_spam else "INBOX"
-    cutoff, since = _window(days)
-    scope = _describe(days, category, unread_only)
 
-    m = _connect(folder)
-    try:
-        ids = _search_ids(m, unread_only, category, since)
-        if not ids:
-            return f"No {scope}."
+    all_emails = []
+    all_snippets = {}
+    total_count = 0
 
-        # One fetch for every header, not one per email. Headers are needed
-        # for the window check, the priority, and the listing alike, so they
-        # are pulled once before anything is narrowed.
-        heads = _fetch_map(m, ids, "(BODY.PEEK[HEADER] UID X-GM-LABELS X-GM-THRID)")
-        cats = {} if is_spam else _category_map(m, ids, days)
+    for acct_idx, acct in enumerate(accounts):
+        is_spam = category == "spam"
+        folder = SPAM_FOLDER if is_spam else "INBOX"
+        cutoff, since = _window(days)
 
-        emails = _collect(heads, ids, cats, cutoff, category, is_spam)
-        if not emails:
-            return f"No {scope}."
+        m = _connect(acct, folder)
+        try:
+            ids = _search_ids(m, unread_only, category, since)
+            if not ids:
+                m.logout()
+                continue
 
-        # Bodies are read before the cut, not after: a rejection or an
-        # interview invite is only identifiable from its body, and tagging
-        # after selection would mean the tag could never save an email from
-        # being dropped. Bounded so a wide window stays fast.
-        snippets = _snippets(m, [e["id"] for e in emails[:TAG_SCAN_MAX]])
-        _tag(emails, snippets, max_model_calls=max_model_calls)
+            # One fetch for every header, not one per email. Headers are needed
+            # for the window check, the priority, and the listing alike, so they
+            # are pulled once before anything is narrowed.
+            heads = _fetch_map(m, ids, "(BODY.PEEK[HEADER] UID X-GM-LABELS X-GM-THRID)")
+            cats = {} if is_spam else _category_map(m, ids, days)
 
-        total = len(emails)
-        emails, dropped = _select(emails, limit)
+            emails = _collect(heads, ids, cats, cutoff, category, is_spam, acct, account_index=acct_idx)
+            if not emails:
+                m.logout()
+                continue
 
-        # _select ranks by priority across every candidate, so an email past
-        # TAG_SCAN_MAX can survive the cut with no snippet and no kind. Fill
-        # those in now — bounded by `limit`, and only when the window was
-        # wide enough to exceed the scan ceiling in the first place.
-        missing = [e["id"] for e in emails if e["id"] not in snippets]
-        if missing:
-            snippets.update(_snippets(m, missing))
-            _tag([e for e in emails if e["id"] in missing], snippets)
+            total_count += len(emails)
 
-        _LAST_FETCH.update({n: e["uid"] for n, e in enumerate(emails, start=1)})
-        _LAST_RECORDS.update({n: {
-            "from": _decode(e["msg"]["From"]),
-            "subject": _decode(e["msg"]["Subject"]),
-            "snippet": snippets.get(e["id"], ""),
-            "kind": e["kind"],
-            "priority": e["priority"],
-            "url": e["url"],
-        } for n, e in enumerate(emails, start=1)})
+            # Bodies are read before the cut, not after: a rejection or an
+            # interview invite is only identifiable from its body, and tagging
+            # after selection would mean the tag could never save an email from
+            # being dropped. Bounded so a wide window stays fast.
+            scan_ids = [e["id"] for e in emails[:TAG_SCAN_MAX]]
+            acct_snippets = _snippets(m, scan_ids)
+            all_snippets.update(acct_snippets)
+            _tag(emails, acct_snippets, max_model_calls=max_model_calls)
 
-        # The one deliberate write: what you've seen stops reappearing. Mail
-        # that needs a reply, or is HIGH priority, is skipped — it stays
-        # unread so it still needs you. Dropped (never-shown) mail is not
-        # touched either.
+            # Add account info to each email
+            for e in emails:
+                e["account"] = acct["name"]
+                e["account_user"] = acct["user"]
+
+            all_emails.extend(emails)
+        finally:
+            m.logout()
+
+    if not all_emails:
+        scope = _describe(days, category, unread_only)
+        return f"No {scope}."
+
+    # Re-derive priority now that we have account_user on each email
+    for e in all_emails:
+        e["priority"] = _priority(
+            e["msg"], e["labels"], e["category"], e.get("kind", ""),
+            account_user=e.get("account_user")
+        )
+
+    # Sort all emails globally by priority, then by date (newest first)
+    all_emails.sort(key=lambda e: (
+        PRIORITY_RANK.get(e["priority"], 99),
+        e["msg"].get("Date", "")
+    ))
+
+    # Apply global limit
+    emails, dropped = _select(all_emails, limit)
+
+    # Fill in snippets for any selected emails that don't have them yet
+    missing = [e["id"] for e in emails if e["id"] not in all_snippets]
+    if missing:
+        # We need to fetch from the right account for each missing email
+        # For simplicity, fetch from the first account that has it
+        for e in emails:
+            if e["id"] in missing:
+                acct_name = e["account"]
+                acct = next((a for a in accounts if a["name"] == acct_name), accounts[0])
+                m = _connect(acct, "INBOX")
+                try:
+                    acct_snippets = _snippets(m, [e["id"]])
+                    all_snippets.update(acct_snippets)
+                finally:
+                    m.logout()
+        _tag([e for e in emails if e["id"] in missing], all_snippets)
+
+    _LAST_FETCH.update({n: e["uid"] for n, e in enumerate(emails, start=1)})
+    _LAST_RECORDS.update({n: {
+        "from": _decode(e["msg"]["From"]),
+        "subject": _decode(e["msg"]["Subject"]),
+        "snippet": all_snippets.get(e["id"], ""),
+        "kind": e["kind"],
+        "priority": e["priority"],
+        "url": e["url"],
+        "account": e.get("account", ""),
+    } for n, e in enumerate(emails, start=1)})
+
+    # The one deliberate write: what you've seen stops reappearing. Mail
+    # that needs a reply, or is HIGH priority, is skipped — it stays
+    # unread so it still needs you. Dropped (never-shown) mail is not
+    # touched either.
+    # Note: mark_read is per-account, so we'd need to group by account
+    # For now, skip mark_read in multi-account mode to be safe
+    if account is not None:  # single account mode
         mark_read(_readable_ids(emails), folder)
 
-        head = f"{total} {scope}. Showing {len(emails)}"
-        if dropped:
-            detail = ", ".join(f"{n} {c}" for c, n in sorted(dropped.items()))
-            head += f", lowest priority omitted ({detail})"
-        return head + ":\n" + "\n".join(
-            _format(emails, snippets, include_snippets))
-    finally:
-        m.logout()
+    head = f"{total_count} emails total across {len(accounts)} account(s). Showing {len(emails)}"
+    if dropped:
+        detail = ", ".join(f"{n} {c}" for c, n in sorted(dropped.items()))
+        head += f", lowest priority omitted ({detail})"
+    return head + ":\n" + "\n".join(
+        _format(emails, all_snippets, include_snippets))
 
 
 def links(important_only=True):
@@ -755,12 +891,25 @@ def links(important_only=True):
     lines = ["Open in Gmail:"]
     for n, r in rows:
         tag = f"[{r['kind']}] " if r["kind"] else ""
-        lines.append(f"  {n}. {tag}{r['subject'][:58]}")
+        # Subject line
+        lines.append(f"  {n}. {tag}{r['subject'][:72]}")
+        # 2-line summary from snippet
+        snippet = r.get("snippet", "").strip()
+        if snippet:
+            # Wrap to ~72 chars for two lines
+            import textwrap
+            wrapped = textwrap.wrap(snippet, width=72)
+            for i, line in enumerate(wrapped[:2]):
+                lines.append(f"     {line}")
+            if len(wrapped) > 2:
+                lines.append(f"     ...")
+        # URL
         lines.append(f"     {r['url']}")
+        lines.append("")  # blank line between entries
     return "\n".join(lines)
 
 
-def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT):
+def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
     """
     A short, multi-line summary meant to be shown on screen (or spoken).
 
@@ -774,7 +923,7 @@ def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT):
     """
     # Fewer model calls than a full triage: something is waiting on this, and
     # most of a full pass's time is the classifier.
-    read_emails(unread_only=True, limit=limit, days=days, max_model_calls=8)
+    read_emails(unread_only=True, limit=limit, days=days, max_model_calls=8, account=account)
     records = list(_LAST_RECORDS.values())
 
     window = "today" if days == 1 else f"the last {days} days"
@@ -785,17 +934,22 @@ def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT):
     actions = [r for r in records if r["kind"] == "action"]
     rejections = [r for r in records if r["kind"] == "rejection"]
 
-    lines = [f"{len(records)} new email{'s' if len(records) != 1 else ''} {window}."]
+    # Count accounts represented
+    accounts_seen = set(r.get("account", "") for r in records if r.get("account"))
+    acct_suffix = f" (across {len(accounts_seen)} account(s))" if len(accounts_seen) > 1 else ""
+
+    lines = [f"{len(records)} new email{'s' if len(records) != 1 else ''} {window}{acct_suffix}."]
 
     if actions:
         lines.append(f"\nNeeds a reply ({len(actions)}):")
-        lines.extend(f"• {_sender_name(r['from'])} — {r['subject'][:60]}"
-                     for r in actions[:5])
+        for r in actions[:5]:
+            acct_tag = f" [{r['account']}]" if r.get("account") else ""
+            lines.append(f"• {_sender_name(r['from'])} — {r['subject'][:60]}{acct_tag}")
     else:
         lines.append("\nNothing needs a reply.")
 
     if rejections:
-        who = ", ".join(_sender_name(r["from"]) for r in rejections[:5])
+        who = ", ".join(f"{_sender_name(r['from'])}" + (f" [{r['account']}]" if r.get("account") else "") for r in rejections[:5])
         lines.append(f"\nRejections ({len(rejections)}): {who}")
 
     if by_kind.get("confirmation"):

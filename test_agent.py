@@ -48,11 +48,31 @@ def test_rejections():
                  "we regret to inform you",
                  "unfortunately we cannot proceed",
                  "you were not selected",
-                 "the position has been filled"):
-        check(f"matches: {text[:38]}", bool(t.REJECTION_RE.search(text)))
+                 "the position has been filled",
+                 # --- Email delivery failures / bounces ---
+                 "delivery status notification",
+                 "mail delivery failed",
+                 "undelivered mail returned to sender",
+                 "could not be delivered",
+                 "recipient rejected",
+                 "mailbox full",
+                 "host unknown",
+                 "connection timed out",
+                 "spam rejected",
+                 "policy violation",
+                 "blacklist",
+                 # --- LinkedIn / job platform rejections ---
+                 "linkedin your application was not selected",
+                 "indeed we regret to inform you that your application",
+                 "application status: rejected",
+                 "we regret to inform you that your application was declined"):
+        check(f"matches: {text[:50]}", bool(t.REJECTION_RE.search(text)))
 
     for text in ("we would like to schedule an interview",
-                 "your application was received"):
+                 "your application was received",
+                 "congratulations on your new job",
+                 "delivery successful",
+                 "mail delivered successfully"):
         check(f"ignores: {text[:38]}", not t.REJECTION_RE.search(text))
 
 

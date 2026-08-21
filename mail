@@ -41,6 +41,7 @@ usage() {
   printf '    %-20s %s\n' '"stop"'      "Cancel the schedule"
   printf '\n'
 
+  
   printf '  %sSet up (run once)%s\n' "$B" "$R"
   printf '    %-20s %s\n' "shortcut"  "Build the Siri shortcut, then install it"
   printf '    %-20s %s\n' "desktop"   "Put a double-clickable chat launcher on the Desktop"
@@ -63,10 +64,12 @@ cmd="${1:-}"
 case "$cmd" in
   help|--help|-h)  usage ;;
   brief)           exec ./run.sh --brief "$@" ;;
+  brief-notify)    exec ./run.sh --brief --notify "$@" ;;
+  brief-whatsapp)  exec ./run.sh --brief --whatsapp-digest "$@" ;;
   once)            exec ./run.sh --once "$@" ;;
   shortcut)        exec ./run.sh --shortcut ;;
   desktop)         exec ./run.sh --desktop ;;
-  test)            exec ./run.sh --test ;;
+    test)            exec ./run.sh --test ;;
   check)           exec ./run.sh --check ;;
   log)
       [ -f siri.log ] || { echo "No Siri runs logged yet."; exit 0; }

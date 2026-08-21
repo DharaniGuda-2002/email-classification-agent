@@ -17,6 +17,37 @@ cd "$(dirname "$0")"
 
 PY=.venv/bin/python
 
+# Progress goes to stderr; stdout is reserved for the agent's own output, so a
+# caller can pipe it clean — the Siri brief is multi-line and must not be
+# mixed with preflight noise.
+
+# UI helpers — colors and symbols
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+GREEN=$'\033[32m'
+RED=$'\033[31m'
+YELLOW=$'\033[33m'
+CYAN=$'\033[36m'
+RESET=$'\033[0m'
+CHECK="✓"
+CROSS="✗"
+ARROW="▶"
+BOX_TOP="┌────────────────────────────────────────┐"
+BOX_MID="├────────────────────────────────────────┤"
+BOX_BOT="└────────────────────────────────────────┘"
+
+step() { printf '\n%s%s%s %s\n' "$BOLD" "$ARROW" "$RESET" "$1" >&2; }
+ok()   { printf '  %s%s%s  %s\n' "$GREEN" "$CHECK" "$RESET" "$1" >&2; }
+bad()  { printf '  %s%s%s  %s\n' "$RED" "$CROSS" "$RESET" "$1" >&2; }
+warn() { printf '  %s!%s  %s\n' "$YELLOW" "$RESET" "$1" >&2; }
+die()  { bad "$1"; [ $# -gt 1 ] && printf '       %s\n' "$2" >&2; exit 1; }
+
+banner() {
+    printf '\n%s%s%s\n' "$CYAN" "$BOX_TOP" "$RESET" >&2
+    printf '%s│%s  %sInbox Triage — Preflight%s  %s│%s\n' "$CYAN" "$RESET" "$BOLD" "$RESET" "$CYAN" "$RESET" >&2
+    printf '%s%s%s\n\n' "$CYAN" "$BOX_BOT" "$RESET" >&2
+}
+
 # Generate and offer to install the Siri shortcut. Needs no preflight, so it
 # runs before the checks — you can build the shortcut without a model loaded.
 if [ "${1:-}" = "--shortcut" ]; then
@@ -43,21 +74,33 @@ if [ "${1:-}" = "--desktop" ]; then
     exit 0
 fi
 
-# Progress goes to stderr; stdout is reserved for the agent's own output, so a
-# caller can pipe it clean — the Siri brief is multi-line and must not be
-# mixed with preflight noise.
-step() { printf '\n\033[1m%s\033[0m\n' "$1" >&2; }
-ok()   { printf '  \033[32mok\033[0m   %s\n' "$1" >&2; }
-bad()  { printf '  \033[31mfail\033[0m %s\n' "$1" >&2; }
-die()  { bad "$1"; [ $# -gt 1 ] && printf '       %s\n' "$2" >&2; exit 1; }
+# Tests need dependencies and nothing else — no mailbox, no model, no .env.
+# Gated here rather than at the end so someone who has just cloned the repo
+# can verify it before handing over a password.
+if [ "${1:-}" = "--test" ]; then
+    # Ensure venv and deps exist
+    if [ ! -x "$PY" ]; then
+        printf '  creating .venv...\n' >&2
+        python3 -m venv .venv
+    fi
+    if [ ! -f .venv/.installed ] || [ requirements.txt -nt .venv/.installed ]; then
+        printf '  installing dependencies...\n' >&2
+        $PY -m pip install -q -r requirements.txt
+        touch .venv/.installed
+    fi
+    step "Tests"
+    exec $PY test_agent.py
+fi
+
 
 # ---------------------------------------------------------------- 1. python
+banner
 step "1/4  Environment"
 if [ ! -x "$PY" ]; then
     printf '  creating .venv...\n' >&2
     python3 -m venv .venv
 fi
-ok "virtualenv"
+ok "virtualenv ready"
 
 # Reinstall only when requirements.txt is newer than the marker we drop after
 # a successful install. Saves ~3s on every subsequent run.
@@ -66,7 +109,7 @@ if [ ! -f .venv/.installed ] || [ requirements.txt -nt .venv/.installed ]; then
     $PY -m pip install -q -r requirements.txt
     touch .venv/.installed
 fi
-ok "dependencies"
+ok "dependencies installed"
 
 # Tests need dependencies and nothing else — no mailbox, no model, no .env.
 # Gated here rather than at the end so someone who has just cloned the repo
@@ -87,23 +130,36 @@ fi
 missing=$($PY - <<'EOF'
 import os
 from dotenv import load_dotenv
-# Explicit path: find_dotenv() walks the call stack to locate .env, and there
-# is no stack to walk when the script arrives on stdin.
 load_dotenv(".env")
-print(" ".join(v for v in ("EMAIL_USER", "EMAIL_PASS", "MODEL")
-                 if not os.environ.get(v)))
+
+# Check for multi-account config first (numbered vars)
+has_numbered = any(os.environ.get(f"EMAIL_USER_{i}") and os.environ.get(f"EMAIL_PASS_{i}") for i in range(1, 10))
+
+if has_numbered:
+    # Numbered accounts configured - validate MODEL only
+    missing = [] if os.environ.get("MODEL") else ["MODEL"]
+else:
+    # Fallback to legacy single-account config
+    missing = [v for v in ("EMAIL_USER", "EMAIL_PASS", "MODEL") if not os.environ.get(v)]
+
+print(" ".join(missing))
 EOF
 )
-[ -n "$missing" ] && die "missing in .env: $missing" "See .env.example."
-ok ".env"
+[ -n "$missing" ] && die "missing in .env: $missing" "See .env.example for multi-account setup."
+ok ".env valid"
 
 # ------------------------------------------------------------------ 3. IMAP
 step "3/4  Mailbox"
 if ! $PY - <<'EOF'
 import sys, email_tool
 try:
-    m = email_tool._connect()
-    m.logout()
+    accounts = email_tool.get_accounts()
+    if not accounts:
+        print("       no email accounts configured", file=sys.stderr)
+        sys.exit(1)
+    for acc in accounts:
+        m = email_tool._connect(acc)
+        m.logout()
 except Exception as exc:
     print(f"       {exc}", file=sys.stderr)
     sys.exit(1)
@@ -112,7 +168,7 @@ then
     die "cannot reach your mailbox" \
         "Check EMAIL_PASS is an app password, and that IMAP is enabled in Gmail."
 fi
-ok "IMAP login"
+ok "IMAP connected"
 
 # -------------------------------------------------------------- 4. LM Studio
 step "4/4  Model"
@@ -140,30 +196,30 @@ if ! curl -sf --max-time 5 "$base/models" >/dev/null 2>&1; then
     die "no server at $base" \
         "Open LM Studio -> Developer tab -> Start Server."
 fi
-ok "server reachable"
+ok "LM Studio server reachable"
 
 # A loaded model whose id does not match MODEL is the most common silent
 # failure: the server answers, the request 404s, and the error is opaque.
 if curl -sf --max-time 5 "$base/models" | grep -q "\"$model\""; then
-    ok "model $model loaded"
+    ok "model \"$model\" loaded"
 elif [ -x "$LMS" ]; then
     # Loading several GB takes a while, so only do it when it is missing.
     printf '  loading %s (this can take a minute)...\n' "$model" >&2
     if "$LMS" load "$model" >/dev/null 2>&1; then
-        ok "model $model loaded"
+        ok "model \"$model\" loaded"
     else
-        printf '  \033[33mwarn\033[0m could not load "%s"\n' "$model" >&2
+        warn "could not load \"$model\""
         printf '       available: %s\n' "$("$LMS" ls 2>/dev/null | \
             awk 'NF && !/^(You have|LLM|EMBEDDING|$)/ {print $1}' | paste -sd, -)" >&2
     fi
 else
-    printf '  \033[33mwarn\033[0m MODEL="%s" is not in the loaded model list\n' "$model" >&2
+    warn "MODEL=\"$model\" is not in the loaded model list"
     printf '       loaded: %s\n' "$(curl -sf "$base/models" | $PY -c \
         'import json,sys; print(", ".join(m["id"] for m in json.load(sys.stdin)["data"]))')" >&2
 fi
 
 if [ "${1:-}" = "--check" ]; then
-    printf '\n\033[32mAll checks passed.\033[0m\n' >&2
+    printf '\n%s%s%s All checks passed.%s\n\n' "$GREEN" "$BOLD" "$CHECK" "$RESET" >&2
     exit 0
 fi
 

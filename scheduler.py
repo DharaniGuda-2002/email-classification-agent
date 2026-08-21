@@ -14,6 +14,7 @@ change your mind mid-conversation.
 import plistlib
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent
@@ -87,20 +88,22 @@ def _describe(hours):
 
 
 def schedule(hours):
-    """Install or replace the job. Returns a sentence for the user."""
+    """
+    Install or replace the job. Returns a sentence for the user.
+    """
     seconds = int(hours * 3600)
     runner = PROJECT / "mail"
     if not runner.exists():
         return f"Cannot schedule: {runner} is missing."
 
+    args = [str(runner), "brief", "--notify"]
+    desc = "notify you"
+
     job = {
         "Label": LABEL,
-        # `brief` is the fast path and needs no terminal. --notify puts
-        # anything that wants a reply on screen; a digest nobody sees is
-        # pointless.
-        "ProgramArguments": [str(runner), "brief", "--notify"],
+        "ProgramArguments": args,
         "StartInterval": seconds,
-        "RunAtLoad": False,      # setting a schedule should not fire one now
+        "RunAtLoad": False,
         "StandardOutPath": str(LOG),
         "StandardErrorPath": str(LOG),
         "WorkingDirectory": str(PROJECT),
@@ -112,8 +115,6 @@ def schedule(hours):
     except OSError as exc:
         return f"Could not write the schedule: {exc}"
 
-    # Replace rather than stack. bootout on a job that is not loaded returns
-    # non-zero, which is fine and expected here.
     _launchctl("bootout", f"gui/{_uid()}/{LABEL}")
     result = _launchctl("bootstrap", f"gui/{_uid()}", str(PLIST))
     if result.returncode != 0:
@@ -121,7 +122,7 @@ def schedule(hours):
                 f"{result.stderr.strip() or result.returncode}")
 
     return (f"Done — I'll check your inbox every {_describe(hours)} "
-            f"and notify you if something needs a reply.")
+            f"and {desc} if something needs a reply.")
 
 
 def unschedule():

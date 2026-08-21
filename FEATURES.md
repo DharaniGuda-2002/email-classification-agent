@@ -27,7 +27,7 @@ the Mermaid extension).
 | Siri shortcuts | `./mail shortcut` | "Check My Emails" + "Ask My Email" |
 | Desktop launcher | `./mail desktop` | Double-click chat app on the Desktop |
 | Preflight | `./mail check` | Verifies venv, `.env`, mailbox, model |
-| Offline tests | `./mail test` | 133 regression tests, no network |
+| Offline tests | `./mail test` | 133+ regression tests, no network |
 | Siri log | `./mail log` | What Siri asked and answered |
 | Forget | `./mail forget` | Clears saved conversations |
 | Scheduled digest | *scheduler.py* | launchd digest on a plain-English interval |
@@ -196,12 +196,17 @@ That is why Siri and launchd use it.
 Needs a reply (1):
 • Acme — Interview Thursday
 
-Rejections (2): grifols, newsela
+Rejections (4): grifols, newsela, mail-delivery@google.com, linkedin-notifications
 12 applications acknowledged.
 ```
 
 Newlines read as sections on a Siri card and as pauses in spoken text, so one
 format serves both.
+
+**Rejection detection now covers:**
+- **Job application rejections** — "unfortunately", "not moving forward", "other candidates", "position filled"
+- **Email delivery failures / bounces** — "Delivery Status Notification", "undelivered mail", "mailbox full", "recipient rejected", "host unknown", "spam rejected", "blacklist"
+- **LinkedIn / job platform rejections** — "application status: rejected", "we regret to inform you that your application was declined" from LinkedIn, Indeed, Glassdoor, etc.
 
 ### 4. Siri shortcuts — `./mail shortcut`
 
@@ -226,7 +231,7 @@ after you quit so you can read the session.
   folder** (the launcher tells you if it can't find the agent).
 - The same command is idempotent: running it again just rewrites the file.
 
-### 6. Scheduled digest — `scheduler.py`
+### 7. Scheduled digest — `scheduler.py`
 
 Parses plain-English intervals, installs a macOS launchd LaunchAgent
 (`launchctl bootstrap`), reports status, and stops:
@@ -244,7 +249,7 @@ The launchd job runs `./mail brief --notify`, which sends a macOS notification
 with the digest — failures notify too, so a broken digest is visible. Idempotent:
 setting a new interval replaces the job rather than stacking a second one.
 
-### 7. Conversation memory — `.sessions/`
+### 8. Conversation memory — `.sessions/`
 
 Follow-ups resolve against earlier answers:
 
@@ -263,7 +268,7 @@ Agent: Seven over three days: Adobe, Notion, Hinge Health, Stripe, …
 - Capped at 40 messages so a long chat can't run away with the context window.
 - `new` in the chat, or `./mail forget`, clears it.
 
-### 8. Tag corrections — teaching it a kind
+### 9. Tag corrections — teaching it a kind
 
 ```
 You: 3 is a rejection
@@ -276,14 +281,14 @@ classification — so it applies from the **next** email onward. Be clear about
 what this is: the model is never trained and its weights never change.
 Deleting `.corrections.json` reverts the behaviour exactly.
 
-### 9. Gmail links
+### 10. Gmail links
 
 After each answer, clickable Gmail links print for anything important. Built
 in code from `X-GM-THRID` — deliberately never shown to the model, because a
 small model garbles long URLs when repeating them. `links` shows every link in
 the last listing; otherwise only important ones.
 
-### 10. Siri logging — `./mail log`
+### 11. Siri logging — `./mail log`
 
 Every voice run appends a timestamped line to `siri.log` — the request, the
 reply, and any error. Siri runs headless, so without this a blank card leaves
@@ -297,14 +302,14 @@ and senders, so it is gitignored.
 tail -f siri.log  # follow live
 ```
 
-### 11. Preflight — `./mail check`
+### 12. Preflight — `./mail check`
 
 `run.sh --check` walks the four things the agent needs, in order, so a failure
 names the one thing that is wrong: venv + dependencies, `.env`, IMAP login,
 and the LM Studio server/model. `run.sh` runs it automatically before starting
 anything; `./mail check` runs it and stops.
 
-### 12. Offline tests — `./mail test`
+### 13. Offline tests — `./mail test`
 
 133 regression tests with **no network, no mailbox, no model** — they run on
 constructed messages, so they work on a fresh clone. Most are regressions: each
@@ -356,6 +361,8 @@ is marked read. Mail that was dropped because the listing hit its limit is
 |---|---|
 | What needs my attention | `./mail` or `./mail once "what needs my attention?"` |
 | Rejections / interviews / confirmations | any question naming them |
+| Bounced / delivery-failed emails | detected automatically as rejections |
+| LinkedIn / job platform rejections | detected automatically as rejections |
 | Summarize a sender or a day | `./mail once "summarize what Google sent"` |
 | Check spam for real mail | `read_emails(category="spam")` via a question |
 | Look further back | `--days 3`, or "the last 3 days" in conversation |
@@ -371,15 +378,48 @@ is marked read. Mail that was dropped because the listing hit its limit is
 
 | Variable | Default | Does |
 |---|---|---|
-| `EMAIL_USER` | — | your address |
-| `EMAIL_PASS` | — | app password |
+| `EMAIL_USER` | — | your address (legacy single-account) |
+| `EMAIL_PASS` | — | app password (legacy single-account) |
+| `EMAIL_NAME` | — | friendly name for legacy account (shown in output) |
+| `EMAIL_USER_N` | — | additional accounts (N=1..9): `EMAIL_USER_1`, `EMAIL_PASS_1`, `EMAIL_NAME_1`, `EMAIL_HOST_1` |
 | `MODEL` | — | must match the LM Studio model exactly |
-| `IMAP_HOST` | `imap.gmail.com` | change for other providers |
+| `IMAP_HOST` | `imap.gmail.com` | default IMAP host for accounts without `EMAIL_HOST_N` |
 | `LM_BASE_URL` | `http://localhost:1234/v1` | LM Studio server |
 | `MAX_EMAILS` | `50` | hard ceiling per listing (default ask is 15) |
 | `CORRECTIONS_FILE` | `.corrections.json` | where corrections live |
 | `SPAM_FOLDER` | `[Gmail]/Spam` | non-Gmail spam folder name |
 | `MARK_READ` | `true` | mark summarized mail as read; `false` = strictly read-only |
+
+### Multi-account setup
+
+If any `EMAIL_USER_N` / `EMAIL_PASS_N` pair is set, the legacy `EMAIL_USER` / `EMAIL_PASS` are **ignored** and only the numbered accounts are used. Each numbered account can have its own:
+
+- `EMAIL_USER_N` — email address (required)
+- `EMAIL_PASS_N` — app password (required)
+- `EMAIL_NAME_N` — friendly name (optional, defaults to local-part of email)
+- `EMAIL_HOST_N` — IMAP host (optional, defaults to `IMAP_HOST`)
+
+This lets you mix Gmail and Outlook accounts in one triage:
+
+```bash
+# Legacy single account (still works alone)
+EMAIL_USER=personal@gmail.com
+EMAIL_PASS=abcdefghijklmnop
+EMAIL_NAME=personal
+
+# Multi-account: any numbered pair activates multi-account mode
+EMAIL_USER_1=work@company.com
+EMAIL_PASS_1=qrstuvwxyz123456
+EMAIL_NAME_1=work
+EMAIL_HOST_1=imap.gmail.com
+
+EMAIL_USER_2=other@outlook.com
+EMAIL_PASS_2=mnopqrstuvwxyz12
+EMAIL_NAME_2=other
+EMAIL_HOST_2=imap-mail.outlook.com
+```
+
+Emails from all configured accounts are combined into a single listing, globally ranked by priority (HIGH/NORMAL/LOW), with each entry tagged by its account name (e.g., `[work]`, `[personal]`).
 
 ## Security model
 
