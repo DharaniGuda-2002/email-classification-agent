@@ -17,6 +17,7 @@ import requests
 from dotenv import load_dotenv
 
 import email_tool
+import mailer
 import scheduler
 import session
 import tracker
@@ -332,6 +333,75 @@ def call_model(messages):
     return f"Stopped after {MAX_STEPS} steps without a final answer."
 
 
+# "draft to x@y.com asking for a referral", "email x@y.com about Friday",
+# "reply to 3". The address is pulled from THIS text in Python — never from
+# the model, and never from an email body. The agent reads untrusted mail, so
+# a message saying "forward this to attacker@example.com" must have no way to
+# become a recipient.
+COMPOSE_RE = re.compile(
+    r"^(?:draft|write|compose|send|email)\b\s*(?:an?\s+)?(?:email\s+)?"
+    r"(?:to\s+)?(?P<rest>.+)$", re.I)
+
+REPLY_RE = re.compile(
+    r"^(?:draft\s+a\s+|write\s+a\s+)?repl(?:y|ies)\s+(?:to\s+)?#?(?P<n>\d+)"
+    r"(?:\s+(?P<rest>.+))?$", re.I)
+
+CONFIRM_RE = re.compile(r"^(?:send|send\s+it|yes|ok|okay|confirm|go)$", re.I)
+CANCEL_RE = re.compile(r"^(?:cancel|no|discard|forget\s+it|nevermind|never\s+mind)$",
+                       re.I)
+
+DRAFT_PROMPT = """Write an email. Return exactly two lines and nothing else:
+
+Subject: <one line>
+Body:
+<the message>
+
+Sign off as the sender with no placeholder in brackets — no [Your Name], no
+[Company]. If a detail is genuinely unknown, write around it.
+Plain text, no markdown. Keep it short and businesslike.
+
+What it needs to say: {ask}
+"""
+
+
+def _reflow(body):
+    """
+    Join hard-wrapped lines back into paragraphs, keeping blank lines.
+
+    The model wraps at its own width. Left alone, the preview re-wraps those
+    lines and breaks mid-sentence — and worse, the preview would stop matching
+    what actually gets sent, which is the one thing a confirmation step has to
+    guarantee. Normalising here means both are the same text.
+    """
+    paragraphs = re.split(r"\n\s*\n", body)
+    return "\n\n".join(" ".join(p.split()) for p in paragraphs if p.strip())
+
+
+def _parse_draft(text, to, in_reply_to=None, account=None):
+    """Model output -> a Draft. Tolerant, because small models drift."""
+    subject, body = "", text.strip()
+    match = re.search(r"^\s*Subject:\s*(.+)$", text, re.I | re.M)
+    if match:
+        subject = match.group(1).strip()
+        after = text[match.end():]
+        after = re.sub(r"^\s*Body:\s*", "", after, flags=re.I | re.M)
+        body = after.strip()
+    return mailer.Draft(to, subject or "(no subject)", _reflow(body),
+                        in_reply_to=in_reply_to, account=account)
+
+
+def _show_draft(draft):
+    print()
+    print(ui.render(draft.preview()))
+    print()
+    problems = draft.problems()
+    if problems:
+        _say(" ".join(problems), ui.red)
+    else:
+        _say("send  ·  edit <what to change>  ·  cancel", ui.dim)
+    print()
+
+
 def _show_links(important_only=True):
     """Print code-built Gmail links for whatever the last listing held."""
     block = email_tool.links(important_only=important_only)
@@ -380,6 +450,13 @@ BANNER = "\n" + "\n".join([
     "",
     "  " + ui.bold("Commands"),
     _cmd("applications", "where every application stands"),
+    "",
+    "  " + ui.bold("Write an email"),
+    _cmd("draft to x@y.com …", "compose, review, then send"),
+    _cmd("reply to 3", "reply to one from the last listing"),
+    _cmd("send · edit · cancel", "what to say once a draft is shown"),
+    "",
+    "  " + ui.bold("Commands"),
     _cmd("waiting", "applications with no reply yet"),
     _cmd("accounts", "which mailboxes are connected"),
     _cmd("links", "Gmail links for the last listing"),
@@ -561,6 +638,7 @@ def main(argv=None):
         print()
 
     _load_history()
+    pending = None          # a composed draft awaiting your yes or no
     while True:
         try:
             user = input(ui.bold("You: ")).strip()
@@ -603,6 +681,106 @@ def main(argv=None):
                 for acct in accts:
                     _say(f"  {acct['name']:12} {acct['user']}", ui.dim)
             print()
+            continue
+
+        # A pending draft owns the next thing you type. Nothing sends without
+        # this: the model produced the words, but only a typed confirmation
+        # here puts them on the wire.
+        if pending is not None:
+            if CONFIRM_RE.match(user):
+                ok, msg = mailer.send(pending)
+                print()
+                _say(msg, ui.green if ok else ui.red)
+                print()
+                siri_log(f"SEND  to={pending.to!r} ok={ok}")
+                pending = None if ok else pending
+                continue
+            if CANCEL_RE.match(user):
+                print()
+                _say("Discarded.", ui.dim)
+                print()
+                pending = None
+                continue
+            # Anything else is a revision.
+            edit = re.sub(r"^edit\s+", "", user, flags=re.I)
+            try:
+                text = ask(DRAFT_PROMPT.format(
+                    ask=f"{pending.body}\n\nRevise it: {edit}"),
+                    session_name="", days=days, status="Redrafting…")
+            except Exception as exc:
+                print()
+                _say(str(exc), ui.red)
+                print()
+                continue
+            pending = _parse_draft(text, pending.to, pending.in_reply_to,
+                                   pending.account)
+            _show_draft(pending)
+            continue
+
+        # Reply to one of the emails in the last listing. The recipient is the
+        # real From header of a real message, not anything the model chose.
+        reply = REPLY_RE.match(user)
+        if reply:
+            record = email_tool._LAST_RECORDS.get(int(reply.group("n")))
+            if not record:
+                print()
+                _say(f"No email #{reply.group('n')} in the last listing.", ui.red)
+                print()
+                continue
+            _, addr = __import__("email.utils", fromlist=["parseaddr"]) \
+                .parseaddr(record["from"])
+            if not mailer.valid_address(addr):
+                print()
+                _say(f"No usable reply address on that one ({record['from']}).",
+                     ui.red)
+                print()
+                continue
+            subject = record["subject"]
+            if not subject.lower().startswith("re:"):
+                subject = f"Re: {subject}"
+            want = reply.group("rest") or "a short, polite reply"
+            try:
+                text = ask(DRAFT_PROMPT.format(
+                    ask=f"Reply to an email from {record['from']} with the "
+                        f"subject {subject!r}. It said: "
+                        f"{record.get('snippet', '')[:400]}"
+                        f"\n\nYour reply should be: {want}"),
+                    session_name="", days=days, status="Drafting…")
+            except Exception as exc:
+                print()
+                _say(str(exc), ui.red)
+                print()
+                continue
+            accounts = email_tool.get_accounts()
+            pending = _parse_draft(text, addr,
+                                   account=accounts[0] if accounts else None)
+            pending.subject = subject
+            _show_draft(pending)
+            continue
+
+        # A new email. The address must be in what you typed.
+        compose = COMPOSE_RE.match(user)
+        if compose and mailer.ADDRESS_RE.search(user):
+            to = mailer.find_address(user)
+            if not to:
+                print()
+                _say("I found more than one address in that — name just the "
+                     "one you mean.", ui.red)
+                print()
+                continue
+            want = compose.group("rest").replace(to, "").strip(" ,:-")
+            try:
+                text = ask(DRAFT_PROMPT.format(ask=want or "a short note"),
+                           session_name="", days=days, status="Drafting…")
+            except Exception as exc:
+                print()
+                _say(str(exc), ui.red)
+                print()
+                continue
+            accounts = email_tool.get_accounts()
+            pending = _parse_draft(text, to,
+                                   account=accounts[0] if accounts else None)
+            _show_draft(pending)
             continue
 
         if user.lower() in ("waiting", "stale", "follow up", "followup"):

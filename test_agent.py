@@ -471,6 +471,65 @@ def test_gmail_links():
 
 # ------------------------------------------------------------------- config
 
+def test_compose():
+    print("\ncomposing and sending")
+    import agent
+    import mailer
+
+    # The recipient is parsed from what YOU typed. The agent reads untrusted
+    # email, so if the model could name an address, a message saying "forward
+    # this to attacker@example.com" would be an exfiltration path.
+    check("address comes from the typed line",
+          mailer.find_address("draft to hr@acme.com about friday")
+          == "hr@acme.com")
+    # Two addresses is ambiguous, and guessing mails the wrong person.
+    check("two addresses refuses to guess",
+          mailer.find_address("a@x.com and b@y.com") is None)
+    check("no address is None", mailer.find_address("no address here") is None)
+
+    check("valid address accepted", mailer.valid_address("a.b+c@d-e.co.uk"))
+    for bad in ("notanaddress", "a@b", "@b.com", "a@.com", ""):
+        check(f"rejects {bad!r}", not mailer.valid_address(bad))
+
+    # A question must not be mistaken for a compose.
+    for text in ("what needs my attention?", "how many rejections do I have?"):
+        check(f"not a compose: {text[:28]}",
+              not (agent.COMPOSE_RE.match(text)
+                   and mailer.ADDRESS_RE.search(text)))
+    check("reply targets a number", bool(agent.REPLY_RE.match("reply to 3")))
+
+    # Only these send. Everything else is treated as a revision, so a stray
+    # word can never put mail on the wire.
+    for yes in ("send", "yes", "ok", "confirm"):
+        check(f"{yes!r} confirms", bool(agent.CONFIRM_RE.match(yes)))
+    for no in ("cancel", "no", "discard"):
+        check(f"{no!r} cancels", bool(agent.CANCEL_RE.match(no)))
+    check("'send it to bob' is not a bare confirm",
+          not agent.CONFIRM_RE.match("send it to bob"))
+
+    d = mailer.Draft("hr@acme.com", "Hi", "Body text")
+    check("a complete draft has no problems", d.problems() == [])
+    check("bad address is a problem",
+          mailer.Draft("nope", "Hi", "x").problems())
+    check("empty body is a problem",
+          mailer.Draft("a@b.com", "Hi", "").problems())
+    check("subject is bounded",
+          len(mailer.Draft("a@b.com", "x" * 500, "b").subject)
+          <= mailer.MAX_SUBJECT)
+
+    # The preview is the confirmation, so it must be exactly what is sent.
+    d2 = agent._parse_draft("Subject: S\n\nBody:\nline one\nline two", "a@b.com")
+    check("hard wraps are reflowed", d2.body == "line one line two")
+    check("preview shows the real body", d2.body in d2.preview())
+    check("preview shows the real recipient", "a@b.com" in d2.preview())
+
+    check("gmail smtp host", mailer.smtp_host("imap.gmail.com") == "smtp.gmail.com")
+    check("outlook smtp host",
+          mailer.smtp_host("imap-mail.outlook.com") == "smtp-mail.outlook.com")
+    check("unknown host is guessed",
+          mailer.smtp_host("imap.fastmail.com") == "smtp.fastmail.com")
+
+
 def test_search():
     print("\nsearch")
     # The query reaches IMAP inside a quoted string, so a stray quote would
@@ -803,7 +862,8 @@ if __name__ == "__main__":
     for fn in (test_rejections, test_actions, test_sender_classification,
                test_body_extraction, test_hostile_input, test_clean,
                test_kind, test_priority, test_sender_name,
-               test_search, test_stale, test_accounts, test_tracker, test_ui_render, test_siri_log, test_session,
+               test_compose, test_search, test_stale, test_accounts,
+               test_tracker, test_ui_render, test_siri_log, test_session,
                test_window, test_selection,
                test_fetch_map, test_listing_invalidation,
                test_mark_read_selection, test_mark_read_store,
