@@ -102,7 +102,8 @@ def get_accounts():
 
     Supports two formats:
     1. Legacy single account: EMAIL_USER, EMAIL_PASS, [EMAIL_NAME], [IMAP_HOST]
-    2. Multi-account: EMAIL_USER_1..9, EMAIL_PASS_1..9, [EMAIL_NAME_1..9], [EMAIL_HOST_1..9]
+    2. Multi-account: EMAIL_USER_1..9, EMAIL_PASS_1..9,
+       [EMAIL_NAME_1..9], [EMAIL_HOST_1..9]
 
     If any EMAIL_USER_N is set, the legacy vars are ignored. Each account dict
     contains: user, pass, name, host. Name defaults to email local-part.
@@ -117,7 +118,8 @@ def get_accounts():
         if user and password:
             name = os.environ.get(f"EMAIL_NAME_{i}") or user.split("@")[0]
             host = os.environ.get(f"EMAIL_HOST_{i}") or IMAP_HOST
-            accounts.append({"user": user, "pass": password, "name": name, "host": host})
+            accounts.append({"user": user, "pass": password,
+                             "name": name, "host": host})
 
     # Fallback to legacy single-account config
     if not accounts:
@@ -125,7 +127,8 @@ def get_accounts():
         password = os.environ.get("EMAIL_PASS")
         if user and password:
             name = os.environ.get("EMAIL_NAME") or "default"
-            accounts.append({"user": user, "pass": password, "name": name, "host": IMAP_HOST})
+            accounts.append({"user": user, "pass": password,
+                             "name": name, "host": IMAP_HOST})
 
     return accounts
 
@@ -468,7 +471,8 @@ def _gmail_url(prefix, account_index=0):
     match = THRID_RE.search(prefix or "")
     if not match:
         return ""
-    return f"https://mail.google.com/mail/u/{account_index}/#all/{int(match.group(1)):x}"
+    thread = f"{int(match.group(1)):x}"
+    return f"https://mail.google.com/mail/u/{account_index}/#all/{thread}"
 
 
 def _priority(msg, labels, category, kind="", account_user=None):
@@ -666,7 +670,8 @@ def _describe(days, category, unread_only):
     return f"{what}{category or 'inbox'} mail from {window}"
 
 
-def _collect(heads, ids, cats, cutoff, category, is_spam, account=None, account_index=0):
+def _collect(heads, ids, cats, cutoff, category, is_spam, account=None,
+             account_index=0):
     """
     Parsed headers -> the email records the rest of the function works on.
 
@@ -692,9 +697,13 @@ def _collect(heads, ids, cats, cutoff, category, is_spam, account=None, account_
             continue
 
         cat = "spam" if is_spam else cats.get(msg_id, "primary")
-        out.append({"id": msg_id, "uid": _uid(prefix), "msg": msg,
-                    "labels": prefix, "category": cat, "url": _gmail_url(prefix, account_index=account_index),
-                    "kind": "", "priority": _priority(msg, prefix, cat, account_user=account_user)})
+        out.append({
+            "id": msg_id, "uid": _uid(prefix), "msg": msg,
+            "labels": prefix, "category": cat, "kind": "",
+            "url": _gmail_url(prefix, account_index=account_index),
+            "priority": _priority(msg, prefix, cat,
+                                  account_user=account_user),
+        })
     return out
 
 
@@ -804,7 +813,8 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
             heads = _fetch_map(m, ids, "(BODY.PEEK[HEADER] UID X-GM-LABELS X-GM-THRID)")
             cats = {} if is_spam else _category_map(m, ids, days)
 
-            emails = _collect(heads, ids, cats, cutoff, category, is_spam, acct, account_index=acct_idx)
+            emails = _collect(heads, ids, cats, cutoff, category, is_spam,
+                              acct, account_index=acct_idx)
             if not emails:
                 m.logout()
                 continue
@@ -857,7 +867,8 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
         for e in emails:
             if e["id"] in missing:
                 acct_name = e["account"]
-                acct = next((a for a in accounts if a["name"] == acct_name), accounts[0])
+                acct = next((a for a in accounts
+                             if a["name"] == acct_name), accounts[0])
                 m = _connect(acct, "INBOX")
                 try:
                     acct_snippets = _snippets(m, [e["id"]])
@@ -893,7 +904,8 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
     if account is not None:  # single account mode
         mark_read(_readable_ids(emails), folder)
 
-    head = f"{total_count} emails total across {len(accounts)} account(s). Showing {len(emails)}"
+    head = (f"{total_count} emails total across {len(accounts)} account(s). "
+            f"Showing {len(emails)}")
     if dropped:
         detail = ", ".join(f"{n} {c}" for c, n in sorted(dropped.items()))
         head += f", lowest priority omitted ({detail})"
@@ -943,7 +955,8 @@ def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
     """
     # Fewer model calls than a full triage: something is waiting on this, and
     # most of a full pass's time is the classifier.
-    read_emails(unread_only=True, limit=limit, days=days, max_model_calls=8, account=account)
+    read_emails(unread_only=True, limit=limit, days=days,
+                max_model_calls=8, account=account)
     records = list(_LAST_RECORDS.values())
 
     window = "today" if days == 1 else f"the last {days} days"
@@ -960,7 +973,8 @@ def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
                    if len(accounts_seen) > 1 else "")
     label = _account_labeller(records)
 
-    lines = [f"{len(records)} new email{'s' if len(records) != 1 else ''} {window}{acct_suffix}."]
+    plural = "s" if len(records) != 1 else ""
+    lines = [f"{len(records)} new email{plural} {window}{acct_suffix}."]
 
     if actions:
         lines.append(f"\nNeeds a reply ({len(actions)}):")
@@ -993,7 +1007,8 @@ def summarize_all(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
     Reads full window, includes every email with a 2-line preview.
     """
     # Read with snippets so we can show previews
-    read_emails(unread_only=True, limit=limit, days=days, include_snippets=True, max_model_calls=20, account=account)
+    read_emails(unread_only=True, limit=limit, days=days,
+                include_snippets=True, max_model_calls=20, account=account)
     records = list(_LAST_RECORDS.values())
 
     window = "today" if days == 1 else f"the last {days} days"
@@ -1008,12 +1023,17 @@ def summarize_all(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
                    if len(accounts_seen) > 1 else "")
     label = _account_labeller(records)
 
-    lines = [f"📬  {len(records)} unread email{'s' if len(records) != 1 else ''} {window}{acct_suffix}"]
-    lines.append(f"   Categories: {', '.join(f'{c} ({n})' for c, n in sorted(by_category.items()))}")
-    lines.append(f"   Kinds: {', '.join(f'{k} ({n})' for k, n in sorted(by_kind.items()) if k)}")
+    plural = "s" if len(records) != 1 else ""
+    lines = [f"📬  {len(records)} unread email{plural} {window}{acct_suffix}"]
+    cats_txt = ", ".join(f"{c} ({n})" for c, n in sorted(by_category.items()))
+    lines.append(f"   Categories: {cats_txt}")
+    kinds_txt = ", ".join(f"{k} ({n})" for k, n in sorted(by_kind.items()) if k)
+    lines.append(f"   Kinds: {kinds_txt}")
 
     # Group by kind for detailed view
-    for kind_label, kind_emoji in [("action", "🔴"), ("rejection", "❌"), ("confirmation", "✅"), ("", "📄")]:
+    groups = [("action", "🔴"), ("rejection", "❌"),
+              ("confirmation", "✅"), ("", "📄")]
+    for kind_label, kind_emoji in groups:
         kind_emails = [r for r in records if r["kind"] == kind_label]
         if not kind_emails:
             continue
@@ -1163,7 +1183,6 @@ def _shorten(text, limit):
     return (cut or text[:limit]).rstrip(" -–—:,") + "…"
 
 
-
 def _account_labeller(records):
     """
     Return a function that tags a line with its account, or a no-op.
@@ -1250,8 +1269,12 @@ def triage_report(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
             out.append(f"* …and {len(worth) - 8} more")
 
     if confirmations:
-        names = ", ".join(dict.fromkeys(_sender_name(r["from"])
-                                        for r in confirmations))
+        # The employer, not the relay. _sender_name gives "greenhouse-mail",
+        # "My Workday" and "unknown" here, because a confirmation is usually
+        # sent by the ATS — tracker.company_of reads the subject first, which
+        # is where the company you actually applied to is named.
+        seen = dict.fromkeys(tracker.company_of(r) for r in confirmations)
+        names = ", ".join(n for n in seen if n != "unknown")
         out.append(f"\n**Confirmations ({len(confirmations)})**")
         out.append(f"Applications acknowledged: {names[:200]}")
 
