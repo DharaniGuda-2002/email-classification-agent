@@ -32,6 +32,8 @@ usage() {
   printf '    %-20s %s\n' "(nothing)" "Chat with your inbox"
   printf '    %-20s %s\n' "brief"     "One short summary — fast, no model prose"
   printf '    %-20s %s\n' 'once "…"'  "A single question, then exit"
+  printf '    %-20s %s\n' "apps"      "Where every application stands"
+  printf '    %-20s %s\n' "accounts"  "Which mailboxes are connected"
   printf '    %-20s %s\n' "log"       "What Siri asked and answered"
   printf '\n'
 
@@ -74,6 +76,12 @@ case "$cmd" in
   log)
       [ -f siri.log ] || { echo "No Siri runs logged yet."; exit 0; }
       exec tail -n "${1:-40}" siri.log
+      ;;
+  accounts|mailboxes)
+      exec .venv/bin/python -c "
+import email_tool
+for a in email_tool.get_accounts():
+    print(f\"  {a['name']:12} {a['user']}\")"
       ;;
   apps|applications|pipeline)
       exec .venv/bin/python -c "import ui, tracker; print(ui.render(tracker.report()))"

@@ -471,6 +471,49 @@ def test_gmail_links():
 
 # ------------------------------------------------------------------- config
 
+def test_accounts():
+    print("\nmultiple mailboxes")
+    # With one mailbox there is nothing to disambiguate, so "[default]" on
+    # every row was pure noise. The labeller stays off until a second
+    # account actually appears.
+    one = [{"account": "default"}, {"account": "default"}]
+    two = [{"account": "personal"}, {"account": "work"}]
+    check("one mailbox is not labelled",
+          t._account_labeller(one)(one[0]) == "")
+    check("two mailboxes are labelled",
+          t._account_labeller(two)(two[1]) == " [work]")
+    check("no account field is not labelled",
+          t._account_labeller([{}])({}) == "")
+
+    # Numbered vars win over the legacy pair, so a half-migrated .env does
+    # not silently read the old mailbox as well as the new ones.
+    saved = {k: os.environ.get(k) for k in
+             ("EMAIL_USER", "EMAIL_PASS", "EMAIL_USER_1", "EMAIL_PASS_1",
+              "EMAIL_NAME_1", "EMAIL_USER_2", "EMAIL_PASS_2")}
+    try:
+        for k in saved:
+            os.environ.pop(k, None)
+        os.environ.update({"EMAIL_USER": "solo@x.com", "EMAIL_PASS": "p"})
+        accts = t.get_accounts()
+        check("legacy single account works",
+              len(accts) == 1 and accts[0]["user"] == "solo@x.com")
+
+        os.environ.update({"EMAIL_USER_1": "a@x.com", "EMAIL_PASS_1": "p",
+                           "EMAIL_NAME_1": "personal",
+                           "EMAIL_USER_2": "b@y.com", "EMAIL_PASS_2": "p"})
+        accts = t.get_accounts()
+        check("numbered accounts are found", len(accts) == 2)
+        check("numbered override legacy",
+              all(a["user"] != "solo@x.com" for a in accts))
+        check("explicit name is kept", accts[0]["name"] == "personal")
+        check("name defaults to the local part", accts[1]["name"] == "b")
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+
 def test_tracker():
     print("\napplication tracker")
     import tracker
@@ -713,7 +756,7 @@ if __name__ == "__main__":
     for fn in (test_rejections, test_actions, test_sender_classification,
                test_body_extraction, test_hostile_input, test_clean,
                test_kind, test_priority, test_sender_name,
-               test_tracker, test_ui_render, test_siri_log, test_session,
+               test_accounts, test_tracker, test_ui_render, test_siri_log, test_session,
                test_window, test_selection,
                test_fetch_map, test_listing_invalidation,
                test_mark_read_selection, test_mark_read_store,

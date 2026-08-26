@@ -351,6 +351,7 @@ BANNER = "\n" + "\n".join([
     "",
     "  " + ui.bold("Commands"),
     _cmd("applications", "where every application stands"),
+    _cmd("accounts", "which mailboxes are connected"),
     _cmd("links", "Gmail links for the last listing"),
     _cmd("3 is a rejection", "teach it a tag it got wrong"),
     _cmd("new", "start a fresh conversation"),
@@ -558,6 +559,19 @@ def main(argv=None):
             tint = ui.red if msg.startswith("ERROR") else ui.green
             print()
             _say(msg, tint)
+            print()
+            continue
+
+        if user.lower() in ("accounts", "mailboxes"):
+            accts = email_tool.get_accounts()
+            print()
+            if not accts:
+                _say("No mailbox configured. See the README.", ui.red)
+            else:
+                _say(f"{len(accts)} mailbox"
+                     f"{'es' if len(accts) != 1 else ''} configured:", ui.cyan)
+                for acct in accts:
+                    _say(f"  {acct['name']:12} {acct['user']}", ui.dim)
             print()
             continue
 

@@ -956,20 +956,23 @@ def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
 
     # Count accounts represented
     accounts_seen = set(r.get("account", "") for r in records if r.get("account"))
-    acct_suffix = f" (across {len(accounts_seen)} account(s))" if len(accounts_seen) > 1 else ""
+    acct_suffix = (f" (across {len(accounts_seen)} accounts)"
+                   if len(accounts_seen) > 1 else "")
+    label = _account_labeller(records)
 
     lines = [f"{len(records)} new email{'s' if len(records) != 1 else ''} {window}{acct_suffix}."]
 
     if actions:
         lines.append(f"\nNeeds a reply ({len(actions)}):")
         for r in actions[:5]:
-            acct_tag = f" [{r['account']}]" if r.get("account") else ""
+            acct_tag = label(r)
             lines.append(f"• {_sender_name(r['from'])} — {r['subject'][:60]}{acct_tag}")
     else:
         lines.append("\nNothing needs a reply.")
 
     if rejections:
-        who = ", ".join(f"{_sender_name(r['from'])}" + (f" [{r['account']}]" if r.get("account") else "") for r in rejections[:5])
+        who = ", ".join(_sender_name(r["from"]) + label(r)
+                        for r in rejections[:5])
         lines.append(f"\nRejections ({len(rejections)}): {who}")
 
     if by_kind.get("confirmation"):
@@ -1001,7 +1004,9 @@ def summarize_all(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
     by_category = Counter(r["category"] for r in records)
 
     accounts_seen = set(r.get("account", "") for r in records if r.get("account"))
-    acct_suffix = f" (across {len(accounts_seen)} account(s))" if len(accounts_seen) > 1 else ""
+    acct_suffix = (f" (across {len(accounts_seen)} accounts)"
+                   if len(accounts_seen) > 1 else "")
+    label = _account_labeller(records)
 
     lines = [f"📬  {len(records)} unread email{'s' if len(records) != 1 else ''} {window}{acct_suffix}"]
     lines.append(f"   Categories: {', '.join(f'{c} ({n})' for c, n in sorted(by_category.items()))}")
@@ -1017,7 +1022,7 @@ def summarize_all(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
         lines.append(f"\n{kind_emoji} {label.upper()} ({len(kind_emails)}):")
 
         for r in kind_emails:
-            acct_tag = f" [{r['account']}]" if r.get("account") else ""
+            acct_tag = label(r)
             sender = _sender_name(r['from'])
             subject = r['subject'][:70]
             snippet = r.get("snippet", "").strip()
@@ -1158,6 +1163,20 @@ def _shorten(text, limit):
     return (cut or text[:limit]).rstrip(" -–—:,") + "…"
 
 
+
+def _account_labeller(records):
+    """
+    Return a function that tags a line with its account, or a no-op.
+
+    With one mailbox there is nothing to disambiguate and "[default]" is
+    noise, so the labeller only switches on once a second account appears.
+    """
+    seen = {r.get("account") for r in records if r.get("account")}
+    if len(seen) < 2:
+        return lambda r: ""
+    return lambda r: f" [{r['account']}]" if r.get("account") else ""
+
+
 def triage_report(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
     """
     The full triage, grouped and counted in code.
@@ -1201,12 +1220,21 @@ def triage_report(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
              and (r["personal"] or r["priority"] != "LOW")]
     noise = [r for r in rest if r not in worth]
 
+    label = _account_labeller(records)
+
     def line(r):
         who = _sender_name(r["from"])
         subject = _shorten(" ".join(r["subject"].split()), 72)
-        return f"* {who} — {subject}"
+        return f"* {who} — {subject}{label(r)}"
 
     out = [f"**{len(records)} unread {window}**"]
+
+    # With several mailboxes, the split is the first thing worth knowing:
+    # 40 unread reads very differently as 35 personal and 5 work.
+    per_account = Counter(r.get("account", "") for r in records if r.get("account"))
+    if len(per_account) > 1:
+        out.append(" · ".join(f"{name} {n}"
+                              for name, n in per_account.most_common()))
 
     out.append(f"\n**Needs a reply ({len(actions)})**")
     out += [line(r) for r in actions] or ["Nothing is waiting on you."]
