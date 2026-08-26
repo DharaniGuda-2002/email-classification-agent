@@ -1285,3 +1285,112 @@ def triage_report(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
         out.append(detail)
 
     return "\n".join(out)
+
+
+# A query reaches this from the model, which got it from you. It goes into an
+# IMAP quoted string, so a stray quote or backslash would end the literal
+# early and the rest would be read as protocol.
+def _imap_quote(text):
+    """Escape a value for an IMAP quoted string, and bound its length."""
+    cleaned = re.sub(r"[\r\n]", " ", str(text or ""))[:200]
+    return cleaned.replace("\\", "\\\\").replace('"', '\\"')
+
+
+SEARCH_DAYS = 30          # searching is for older mail; the triage covers today
+
+
+def search_emails(query, days=SEARCH_DAYS, limit=DEFAULT_LIMIT,
+                  unread_only=False, account=None):
+    """
+    Find mail matching a query, over a much wider window than the triage.
+
+    The triage answers "what arrived today", which cannot answer "did
+    TheGuarantors ever reply" or "anything from Google". Read mail is included
+    by default: the thing you are looking for is usually one you already saw.
+
+    On Gmail this hands the whole query to X-GM-RAW, so the operators you know
+    work — from:, subject:, has:attachment, older_than:. Elsewhere it falls
+    back to a full-text IMAP search.
+    """
+    query = " ".join(str(query or "").split())
+    if not query:
+        return "Give me something to search for."
+
+    try:
+        days = max(1, min(int(days), 365))
+        limit = max(1, min(int(limit), HARD_LIMIT))
+    except (TypeError, ValueError):
+        days, limit = SEARCH_DAYS, DEFAULT_LIMIT
+
+    _, since = _window(days)
+    accounts = get_accounts() if account is None else [account]
+    if not accounts:
+        raise RuntimeError("No mailbox configured. See the README.")
+
+    label_needed = len(accounts) > 1
+    found, total = [], 0
+
+    for acct in accounts:
+        m = _connect(acct, "INBOX")
+        try:
+            ids = _gmail_search(m, query, unread_only, since)
+            total += len(ids)
+            if not ids:
+                continue
+
+            newest = ids[-limit:][::-1]
+            heads = _fetch_map(m, newest, "(BODY.PEEK[HEADER] X-GM-THRID)")
+            for msg_id in newest:
+                entry = heads.get(msg_id)
+                if not entry:
+                    continue
+                prefix, payload = entry
+                msg = email.message_from_bytes(payload)
+                found.append({
+                    "from": _decode(msg["From"]),
+                    "subject": _decode(msg["Subject"]),
+                    "date": (msg["Date"] or "")[:16],
+                    "account": acct["name"] if label_needed else "",
+                })
+        except imaplib.IMAP4.error as exc:
+            _trace(f"[search] {acct['name']}: {exc}")
+        finally:
+            try:
+                m.logout()
+            except Exception:
+                pass
+
+    if not found:
+        return (f"Nothing matching {query!r} in the last {days} days. "
+                "Try a wider window or fewer words.")
+
+    lines = [f"{total} match{'es' if total != 1 else ''} for {query!r} "
+             f"in the last {days} days. Showing {len(found)}:"]
+    for n, r in enumerate(found[:limit], start=1):
+        tag = f" [{r['account']}]" if r["account"] else ""
+        lines.append(f"{n}. From: {_sender_name(r['from'])}{tag} | "
+                     f"Subject: {_shorten(r['subject'], 70)} | {r['date']}")
+    return "\n".join(lines)
+
+
+def _gmail_search(m, query, unread_only, since):
+    """
+    Server-side search, with a fallback for providers that are not Gmail.
+
+    X-GM-RAW is Gmail's own query language, so "from:google" and
+    "has:attachment" behave exactly as they do in the web UI. Everything else
+    gets IMAP TEXT, which is a plain substring match over the message.
+    """
+    if unread_only:
+        query = f"{query} is:unread"
+    try:
+        _, data = m.search(None, "X-GM-RAW", f'"{_imap_quote(query)}"',
+                           "SINCE", since)
+        return data[0].split()
+    except imaplib.IMAP4.error:
+        # Not Gmail, or the raw query was rejected.
+        criteria = ["TEXT", f'"{_imap_quote(query)}"', "SINCE", since]
+        if unread_only:
+            criteria.insert(0, "UNSEEN")
+        _, data = m.search(None, *criteria)
+        return data[0].split()

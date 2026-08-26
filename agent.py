@@ -21,8 +21,9 @@ import scheduler
 import session
 import tracker
 import ui
-from email_tool import (read_emails, read_email_body, DEFAULT_LIMIT,
-                        HARD_LIMIT, DEFAULT_DAYS, SOFT_MAX_DAYS)
+from email_tool import (read_emails, read_email_body, search_emails,
+                        DEFAULT_LIMIT, HARD_LIMIT, DEFAULT_DAYS,
+                        SOFT_MAX_DAYS, SEARCH_DAYS)
 # Arrow-key history and editing in the chat prompt. Optional: without it the
 # loop still works, just without a scroll-back buffer.
 try:
@@ -103,6 +104,13 @@ read_emails      lists mail. Each line carries a [PRIORITY] and a [category].
                  Set include_snippets=true when you need to summarize.
                  Filter with category: primary, promotions, social, updates,
                  forums, or spam.
+search_emails    finds mail by sender, subject or content, over a much wider
+                 window than read_emails and including mail already read.
+                 Any question about a specific company, person or topic goes
+                 here — "anything from Google?", "did Stripe ever reply?".
+                 read_emails only ever sees the last day or two, so it cannot
+                 answer those. Prefer from:acme.com over a bare word: bare
+                 words also match footers and tracking links.
 read_email_body  full text of one message, by its number in the last listing.
 
 TIME WINDOW
@@ -215,6 +223,26 @@ TOOLS = [
         }},
     }},
     {"type": "function", "function": {
+        "name": "search_emails",
+        "description": (
+            "Find mail by sender, subject or content, across a much wider "
+            "window than read_emails and including mail already read. Use "
+            "this for any question about a specific company, person or "
+            "topic — 'anything from Google?', 'did Stripe reply?'. On Gmail "
+            "the query supports from:, subject:, has:attachment."),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string",
+                      "description": ("What to look for. Prefer from:acme.com "
+                                      "when the user names a company or "
+                                      "sender — a bare word also matches "
+                                      "footers and signatures.")},
+            "days": {"type": "integer",
+                     "description": f"How far back. Default {SEARCH_DAYS}."},
+            "limit": {"type": "integer",
+                      "description": f"Max results, default {DEFAULT_LIMIT}."},
+        }, "required": ["query"]},
+    }},
+    {"type": "function", "function": {
         "name": "read_email_body",
         "description": ("Read the full body of one email by its number "
                         "from read_emails."),
@@ -228,6 +256,7 @@ TOOLS = [
 TOOL_IMPL = {
     "read_emails": read_emails,
     "read_email_body": read_email_body,
+    "search_emails": search_emails,
 }
 
 
@@ -351,6 +380,7 @@ BANNER = "\n" + "\n".join([
     "",
     "  " + ui.bold("Commands"),
     _cmd("applications", "where every application stands"),
+    _cmd("waiting", "applications with no reply yet"),
     _cmd("accounts", "which mailboxes are connected"),
     _cmd("links", "Gmail links for the last listing"),
     _cmd("3 is a rejection", "teach it a tag it got wrong"),
@@ -572,6 +602,12 @@ def main(argv=None):
                      f"{'es' if len(accts) != 1 else ''} configured:", ui.cyan)
                 for acct in accts:
                     _say(f"  {acct['name']:12} {acct['user']}", ui.dim)
+            print()
+            continue
+
+        if user.lower() in ("waiting", "stale", "follow up", "followup"):
+            print()
+            print(ui.render(tracker.stale()))
             print()
             continue
 

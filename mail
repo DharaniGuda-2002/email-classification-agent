@@ -33,6 +33,7 @@ usage() {
   printf '    %-20s %s\n' "brief"     "One short summary — fast, no model prose"
   printf '    %-20s %s\n' 'once "…"'  "A single question, then exit"
   printf '    %-20s %s\n' "apps"      "Where every application stands"
+  printf '    %-20s %s\n' "waiting"   "Applications with no reply yet"
   printf '    %-20s %s\n' "accounts"  "Which mailboxes are connected"
   printf '    %-20s %s\n' "log"       "What Siri asked and answered"
   printf '\n'
@@ -82,6 +83,9 @@ case "$cmd" in
 import email_tool
 for a in email_tool.get_accounts():
     print(f\"  {a['name']:12} {a['user']}\")"
+      ;;
+  waiting|stale)
+      exec .venv/bin/python -c "import ui, tracker; print(ui.render(tracker.stale()))"
       ;;
   apps|applications|pipeline)
       exec .venv/bin/python -c "import ui, tracker; print(ui.render(tracker.report()))"

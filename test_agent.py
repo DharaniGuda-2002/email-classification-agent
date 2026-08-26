@@ -471,6 +471,53 @@ def test_gmail_links():
 
 # ------------------------------------------------------------------- config
 
+def test_search():
+    print("\nsearch")
+    # The query reaches IMAP inside a quoted string, so a stray quote would
+    # close the literal early and the rest would be read as protocol.
+    check("quotes are escaped", '\\"' in t._imap_quote('say "hi"'))
+    check("backslashes are escaped", t._imap_quote("a\\b") == "a\\\\b")
+    check("newlines cannot inject", "\n" not in t._imap_quote("a\nOK LOGOUT"))
+    check("length is bounded", len(t._imap_quote("x" * 5000)) <= 200)
+    check("None is safe", t._imap_quote(None) == "")
+
+    check("empty query asks for one",
+          "search for" in t.search_emails("").lower())
+    check("whitespace query asks for one",
+          "search for" in t.search_emails("   ").lower())
+
+
+def test_stale():
+    print("\nfollow-ups")
+    import tracker
+    original = tracker.STORE
+    tmp = __import__("pathlib").Path("/tmp/stale_test.json")
+    try:
+        tracker.STORE = tmp
+        import json
+        from datetime import date, timedelta
+        old = (date.today() - timedelta(days=30)).isoformat()
+        tmp.write_text(json.dumps({
+            "quiet": {"name": "Quiet Co", "status": "applied",
+                      "first_seen": old, "last_seen": old},
+            "fresh": {"name": "Fresh Co", "status": "applied",
+                      "first_seen": date.today().isoformat(),
+                      "last_seen": date.today().isoformat()},
+            # Already came back to you — not a follow-up candidate.
+            "done": {"name": "Done Co", "status": "rejected",
+                     "first_seen": old, "last_seen": old},
+        }))
+        out = tracker.stale(days=14)
+        check("old silent application is listed", "Quiet Co" in out)
+        check("recent one is not", "Fresh Co" not in out)
+        check("a rejection is not waiting", "Done Co" not in out)
+        check("nothing stale reads cleanly",
+              "Nothing has been waiting" in tracker.stale(days=999))
+    finally:
+        tracker.STORE = original
+        tmp.unlink(missing_ok=True)
+
+
 def test_accounts():
     print("\nmultiple mailboxes")
     # With one mailbox there is nothing to disambiguate, so "[default]" on
@@ -756,7 +803,7 @@ if __name__ == "__main__":
     for fn in (test_rejections, test_actions, test_sender_classification,
                test_body_extraction, test_hostile_input, test_clean,
                test_kind, test_priority, test_sender_name,
-               test_accounts, test_tracker, test_ui_render, test_siri_log, test_session,
+               test_search, test_stale, test_accounts, test_tracker, test_ui_render, test_siri_log, test_session,
                test_window, test_selection,
                test_fetch_map, test_listing_invalidation,
                test_mark_read_selection, test_mark_read_store,

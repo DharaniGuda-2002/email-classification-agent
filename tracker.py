@@ -213,3 +213,43 @@ def forget():
         return True
     except OSError:
         return False
+
+
+STALE_DAYS = 14        # a fortnight of silence is worth a nudge
+
+
+def stale(days=STALE_DAYS):
+    """
+    Applications with no reply after `days`. Markdown for ui.render().
+
+    The pipeline knows when each one was first seen, so it can answer the
+    question the inbox cannot: who has gone quiet long enough to be worth a
+    follow-up. Only "applied" counts — an interview or a rejection has
+    already come back to you.
+    """
+    from datetime import date
+
+    data = _load()
+    today = date.today()
+    waiting = []
+
+    for key, e in data.items():
+        if e.get("status") != "applied":
+            continue
+        try:
+            seen = date.fromisoformat(e.get("first_seen", ""))
+        except ValueError:
+            continue
+        age = (today - seen).days
+        if age >= days:
+            waiting.append((age, e.get("name", key)))
+
+    if not waiting:
+        return (f"Nothing has been waiting longer than {days} days. "
+                "Everything recent has either replied or is still fresh.")
+
+    waiting.sort(reverse=True)
+    out = [f"**{len(waiting)} waiting longer than {days} days**"]
+    out += [f"* {name} — {age} days" for age, name in waiting]
+    out.append("\nNo reply is not a no. A short follow-up is normal.")
+    return "\n".join(out)
