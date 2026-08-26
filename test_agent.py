@@ -121,6 +121,13 @@ def test_sender_classification():
     check("Feedback-ID means bulk", t._is_bulk(msg(Feedback_ID="1:2:3")))
     check("List-Unsubscribe means bulk", t._is_bulk(msg(List_Unsubscribe="<u>")))
     check("X-SES-Outgoing means bulk", t._is_bulk(msg(X_SES_Outgoing="1")))
+    # American Express marketing carried only X-MSFBL — no List-*, no
+    # Feedback-ID — so it read as a person writing to you and landed under
+    # "needs a reply". Each of these is one big sender's fingerprint.
+    for header in ("X_MSFBL", "X_Mandrill_User", "X_Klaviyo_ID",
+                   "X_Marketo_ID", "X_Emarsys_ID", "X_CMail_ID"):
+        check(f"{header.replace('_', '-')} means bulk",
+              t._is_bulk(msg(**{header: "1"})))
     check("plain headers are not bulk", not t._is_bulk(msg(Subject="hi")))
 
 
@@ -844,6 +851,30 @@ def test_ui_render():
     # Runs of blank lines would otherwise push the answer off screen.
     check("blank runs collapse", "\n\n\n" not in ui.render("a\n\n\n\n\nb"))
     check("width is sane", 20 < ui.width() <= ui.MAX_WIDTH)
+
+    # Colour carries meaning: the section you must act on must not look the
+    # same as the one you can ignore. Every heading was cyan before, which
+    # wasted the strongest signal a terminal has.
+    check("needs-a-reply is amber", ui._section_color("Needs a reply (2)") == "amber")
+    check("rejections are red", ui._section_color("Rejections (1)") == "red")
+    check("confirmations are green",
+          ui._section_color("Confirmations (8)") == "green")
+    check("noise is dim", ui._section_color("Noise (22)") == "dim")
+    # Anything unrecognised must still render, just without a special colour.
+    check("unknown headings fall back", ui._section_color("Something New") == "cyan")
+    check("matching is case-insensitive",
+          ui._section_color("NEEDS A REPLY") == "amber")
+
+    # The count is context, not the point, so it is separated from the words.
+    out = ui.render("**Needs a reply (2)**")
+    check("count survives the heading", "2" in out)
+    check("heading words survive", "Needs a reply" in out)
+
+    # A spinner that draws into a pipe would corrupt the Siri card and the
+    # cron log, so it must draw nothing unless stderr is a terminal.
+    token = ui.thinking("x")
+    check("no spinner when piped", token is None)
+    ui.done_thinking(token)          # must not raise on None
 
 
 def test_siri_log():

@@ -251,9 +251,17 @@ CONFIRMATION_RE = re.compile(r"""
 # marketing all carry them while looking perfectly personal otherwise. Any
 # List-* header means a mailing list by RFC 2369.
 BULK_HEADER_PREFIXES = ("list-", "x-ses", "x-sfmc", "x-campaign", "x-mailgun",
-                        "x-sendgrid", "x-sg-", "x-alidm", "x-250ok", "x-mailer")
+                        "x-sendgrid", "x-sg-", "x-alidm", "x-250ok", "x-mailer",
+                        # Feedback-loop and campaign headers from the other
+                        # big senders. American Express marketing carried
+                        # only X-MSFBL, so it read as a person writing to
+                        # you and landed under "needs a reply".
+                        "x-msfbl", "x-mandrill", "x-mc-", "x-cmail",
+                        "x-rpcampaign", "x-emarsys", "x-marketo",
+                        "x-cm-", "x-klaviyo", "x-braze", "x-iterable")
 BULK_HEADERS = ("feedback-id", "auto-submitted", "errors-to",
-                "x-csa-complaints", "x-report-abuse")
+                "x-csa-complaints", "x-report-abuse", "x-job",
+                "campaign-id", "x-mailing-id")
 
 # Nobody is sitting behind these waiting for your reply.
 # Separators must allow . _ and - : "no_reply@" and "do.not.reply@" are as
