@@ -1,0 +1,51 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b9aaa"/>
+      <stop offset="1" stop-color="#0d6e7a"/>
+    </linearGradient>
+    <linearGradient id="tray" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd166"/>
+      <stop offset="1" stop-color="#f4a261"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <!-- rounded tile background -->
+  <rect x="32" y="32" width="960" height="960" rx="220" ry="220" fill="url(#bg)"/>
+
+  <!-- inbox body -->
+  <g filter="url(#shadow)">
+    <!-- mail slot -->
+    <path d="M256 360 L512 520 L768 360 L768 300 L256 300 Z" fill="#e9f6f8"/>
+    <!-- inbox shell -->
+    <path d="M236 360
+             L512 520
+             L788 360
+             L788 720
+             Q788 760 748 760
+             L276 760
+             Q236 760 236 720
+             Z"
+          fill="#ffffff"/>
+    <!-- inbox front lip / tray -->
+    <path d="M236 600
+             Q512 700 788 600
+             L788 720
+             Q788 760 748 760
+             L276 760
+             Q236 760 236 720
+             Z"
+          fill="url(#tray)"/>
+  </g>
+
+  <!-- triage check badge -->
+  <g>
+    <circle cx="740" cy="300" r="120" fill="#06d6a0" stroke="#ffffff" stroke-width="14"/>
+    <path d="M688 300 L724 338 L796 262"
+          fill="none" stroke="#ffffff" stroke-width="26"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

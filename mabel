@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# One command for everything. Creates the venv, checks config, runs.
+#
+#   ./mabel help      grouped list of every command (start here)
+#   ./mabel           start chatting with your inbox
+#   ./mabel brief     one short summary, no model prose (what Siri runs)
+#   ./mabel once "…"  a single question, no chat
+#   ./mabel log       what Siri asked and answered
+#   ./mabel shortcut  build the double-click Siri shortcut
+#   ./mabel test      offline test suite
+#   ./mabel check     preflight only
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+PY=.venv/bin/python
+
+# Colour only on a real terminal, and never under NO_COLOR — piped output has
+# to stay clean for Siri, cron and launchd.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  A=$'\033[38;5;39m'; B=$'\033[1m'; D=$'\033[2m'; R=$'\033[0m'
+else
+  A=""; B=""; D=""; R=""
+fi
+
+usage() {
+  printf '\n  %s📬  Mabel%s   %syour inbox triage agent%s\n\n' "$A" "$R" "$D" "$R"
+  printf '  %sUsage:%s ./mabel [command]   %s(no command = start chatting)%s\n\n' \
+         "$B" "$R" "$D" "$R"
+
+  printf '  %sEveryday%s\n' "$B" "$R"
+  printf '    %-20s %s\n' "(nothing)" "Chat with your inbox"
+  printf '    %-20s %s\n' "brief"     "One short summary — fast, no model prose"
+  printf '    %-20s %s\n' 'once "…"'  "A single question, then exit"
+  printf '    %-20s %s\n' "apps"      "Where every application stands"
+  printf '    %-20s %s\n' "waiting"   "Applications with no reply yet"
+  printf '    %-20s %s\n' "accounts"  "Which mailboxes are connected"
+  printf '    %-20s %s\n' "log"       "What Siri asked and answered"
+  printf '\n'
+
+  printf '  %sSchedule (in chat or with once)%s\n' "$B" "$R"
+  printf '    %-20s %s\n' '"check every 2h"' "Run on a schedule (launchd)"
+  printf '    %-20s %s\n' '"status"'    "Show current schedule"
+  printf '    %-20s %s\n' '"stop"'      "Cancel the schedule"
+  printf '\n'
+
+  
+  printf '  %sSet up (run once)%s\n' "$B" "$R"
+  printf '    %-20s %s\n' "shortcut"  "Build the Siri shortcut, then install it"
+  printf '    %-20s %s\n' "desktop"   "Put a double-clickable chat launcher on the Desktop"
+  printf '    %s%s%s\n\n' "$D" "Re-run if you move this folder." "$R"
+
+  printf '  %sMaintenance%s\n' "$B" "$R"
+  printf '    %-20s %s\n' "check"     "Preflight: venv, .env, mailbox, model"
+  printf '    %-20s %s\n' "test"      "Offline test suite (no mailbox needed)"
+  printf '    %-20s %s\n' "forget"    "Clear the saved conversation"
+  printf '\n'
+
+  printf '  %sOptions%s  %s(any command)%s\n' "$B" "$R" "$D" "$R"
+  printf '    %-20s %s\n' "--days N"  "How far back to look (default 1)"
+  printf '\n'
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift || true
+
+case "$cmd" in
+  help|--help|-h)  usage ;;
+  brief)           exec ./run.sh --brief "$@" ;;
+  brief-notify)    exec ./run.sh --brief --notify "$@" ;;
+  brief-whatsapp)  exec ./run.sh --brief --whatsapp-digest "$@" ;;
+  once)            exec ./run.sh --once "$@" ;;
+  shortcut)        exec ./run.sh --shortcut ;;
+  desktop)         exec ./run.sh --desktop ;;
+    test)            exec ./run.sh --test ;;
+  check)           exec ./run.sh --check ;;
+  log)
+      [ -f siri.log ] || { echo "No Siri runs logged yet."; exit 0; }
+      exec tail -n "${1:-40}" siri.log
+      ;;
+  accounts|mailboxes)
+      exec .venv/bin/python -c "
+import email_tool
+for a in email_tool.get_accounts():
+    print(f\"  {a['name']:12} {a['user']}\")"
+      ;;
+  waiting|stale)
+      exec .venv/bin/python -c "import ui, tracker; print(ui.render(tracker.stale()))"
+      ;;
+  apps|applications|pipeline)
+      exec .venv/bin/python -c "import ui, tracker; print(ui.render(tracker.report()))"
+      ;;
+  forget)
+      rm -rf .sessions && echo "Conversation cleared."
+      ;;
+  "")              exec ./run.sh ;;
+  --*)             exec ./run.sh "$cmd" "$@" ;;
+  *)
+      # An unknown word is almost always a question typed without `once`.
+      # Answering it beats a usage dump the user has to re-read.
+      exec ./run.sh --once "$cmd" "$@"
+      ;;
+esac

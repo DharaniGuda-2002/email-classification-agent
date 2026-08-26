@@ -1,0 +1,34 @@
+# Secrets — never commit
+.env
+
+# Editors and OS cruft
+.DS_Store
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Tag corrections you have taught it
+.corrections.json
+
+# Generated Siri shortcut (regenerate with ./run.sh --shortcut)
+*.shortcut
+.unsigned.shortcut
+
+# Siri command/response log (contains email subjects and senders)
+siri.log
+
+# Conversation memory (contains your questions and email details)
+.sessions/
+
+# Scheduled-run log (scheduler.py)
+schedule.log
+
+# Application pipeline (company names from your mail)
+.applications.json
+
+# Local editor/tool config
+.claude/

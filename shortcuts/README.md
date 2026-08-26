@@ -1,0 +1,138 @@
+# Asking Siri to check your email
+
+"Hey Siri, Mabel" → it runs the agent and shows today's summary on
+screen (Siri reads the card aloud as it appears):
+
+> 26 new emails today.
+>
+> Needs a reply (1):
+> • Acme — Interview Thursday
+>
+> Rejections (2): grifols, newsela
+> 12 applications acknowledged.
+
+Siri waits for the model to finish, then shows the real result — about 20
+seconds. Everything runs on your Mac.
+
+---
+
+## Install it (no manual building)
+
+```bash
+./mabel shortcut
+```
+
+That generates **two signed shortcuts**, then asks if you want to open them.
+Say yes, click **Add Shortcut** in each window, and that is the whole setup.
+You never build actions by hand.
+
+| shortcut | say | does |
+|---|---|---|
+| Mabel | "Hey Siri, Mabel" | today's summary, no question |
+| Ask Mabel | "Hey Siri, Ask Mabel" | asks what you want, then answers |
+
+**Ask Mabel** is the conversational one: Siri prompts, you say *"any
+interviews this week?"*, it answers. It shares memory with the terminal chat,
+so a follow-up in the same 15 minutes still knows what you meant.
+
+If you skipped the prompt, install it later with:
+
+```bash
+open "Mabel.shortcut"
+```
+
+Then say **"Hey Siri, Mabel."**
+
+The shortcut embeds this project's path, so if you move the folder, run
+`./mabel shortcut` again.
+
+### What it contains
+
+Two actions: **Run Shell Script** (runs `shortcuts/check-emails.sh`, which
+does `run.sh --brief`) and **Show Result** (displays the reply on screen). The
+shell action blocks until the model replies, which is why Siri waits for the
+real answer. The conversational shortcut ("Ask Mabel") is three actions —
+Ask for Input, Run Shell Script, Show Result — so Siri can take your question.
+
+---
+
+## Before it will work
+
+- **Run the agent once in a terminal first** — `./run.sh` — so the mailbox
+  login and the model are known to work. Siri can only run what already runs.
+- **LM Studio does not need to be open.** `run.sh` starts it via the `lms`
+  CLI. First run of the day is slower (~20s) because the model loads cold.
+- **Full Disk Access.** The project lives under `~/Desktop`, which macOS
+  protects. If the shortcut is silent, give **Shortcuts** Full Disk Access in
+  System Settings → Privacy & Security.
+
+---
+
+## Timing
+
+| starting state | time |
+|---|---|
+| LM Studio open, model loaded | ~9s |
+| model idle (unloaded after 60 min) | ~20s |
+| LM Studio fully quit | ~22s |
+
+A once-a-day question almost always pays the ~20s, since the model unloads
+after 60 minutes idle. Raise the TTL in LM Studio to keep it loaded.
+
+---
+
+## Seeing what Siri asked and answered
+
+Every voice run appends to **`siri.log`** in the project root — the request,
+the reply, and any error. Siri runs headless, so without this a blank card
+leaves nothing to debug from.
+
+```bash
+tail -f siri.log
+```
+
+```
+2026-07-23 14:16:30  ASK   check emails (days=1)
+2026-07-23 14:16:41  REPLY '3 new emails.\nNeeds a reply (1):\n• Acme — Interview'
+```
+
+An `ASK` with no matching `REPLY` means the run never finished — usually the
+model was still loading, or Siri timed out. `siri.log` holds email subjects
+and senders, so it is gitignored and stays on your machine.
+
+## If it doesn't work
+
+**Test with ▶ first.** Open the shortcut in the Shortcuts app and click ▶.
+That surfaces errors in a window instead of as silence from Siri.
+
+**Check `siri.log`** — if `ASK` is there but no `REPLY`, the script started
+but the model didn't answer in time.
+
+| symptom | fix |
+|---|---|
+| "Could not check your email" | agent failed to start — run `./run.sh --check` |
+| silence | Run Shell Script path is wrong, or Shortcuts lacks Full Disk Access |
+| Siri opens the app instead of running | name collides — rename the shortcut |
+| nothing shows | the Show Result action lost its input; regenerate |
+
+---
+
+## Building it by hand
+
+Only if `./mabel shortcut` fails to sign. In the **Shortcuts** app, new
+shortcut named **Mabel**, two actions:
+
+1. **Run Shell Script** — Shell `/bin/zsh`, script:
+   ```
+   /Users/you/Desktop/agent/shortcuts/check-emails.sh
+   ```
+2. **Show Result** — input set to **Shell Script Result**.
+
+---
+
+## On your iPhone
+
+Not as-is. The script needs this Mac's Python, LM Studio and mailbox
+credentials, and the Run Shell Script action does not exist in Shortcuts on
+iOS. Reaching it from a phone means exposing the Mac over SSH — a separate
+project with real security tradeoffs.
