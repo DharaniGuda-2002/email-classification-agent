@@ -408,6 +408,43 @@ def test_mark_read_selection():
     check("the rest are marked read", selected == ["2", "3", "5"], selected)
 
 
+def test_mark_groups():
+    print("\nwhat gets marked read")
+    emails = [
+        {"uid": b"1", "kind": "", "priority": "LOW", "account": "personal"},
+        {"uid": b"2", "kind": "action", "priority": "HIGH", "account": "personal"},
+        {"uid": b"3", "kind": "rejection", "priority": "NORMAL", "account": "school"},
+        {"uid": b"4", "kind": "", "priority": "HIGH", "account": "school"},
+        {"uid": None, "kind": "", "priority": "LOW", "account": "personal"},
+    ]
+    groups = t._mark_groups(emails)
+
+    # Mail that wants something from you must stay unread, or the agent
+    # quietly buries the interview invite it just showed you.
+    check("action is never marked", b"2" not in groups.get("personal", []))
+    check("HIGH is never marked", b"4" not in groups.get("school", []))
+    # A rejection needs nothing from you, so it goes.
+    check("rejection is marked", b"3" in groups.get("school", []))
+    check("ordinary mail is marked", b"1" in groups.get("personal", []))
+
+    # A UID only means anything on the mailbox it came from: marking one
+    # account's UIDs against another flags whatever shares that number.
+    check("grouped by account", set(groups) == {"personal", "school"})
+    check("no uid, no write", all(None not in v for v in groups.values()))
+    check("nothing to mark is empty", t._mark_groups([]) == {})
+
+    # This whole path was dead: read_emails guarded it with
+    # `if account is not None`, which is false on every normal call, so
+    # nothing was ever marked and the same mail came back every morning.
+    # Comments are stripped first: the explanation of this very bug mentions
+    # the old guard, and matching prose rather than code is how a regression
+    # test quietly stops testing anything.
+    src = __import__("inspect").getsource(t.read_emails)
+    code = "\n".join(ln.split("#")[0] for ln in src.splitlines())
+    check("the caller calls it", "_mark_groups(emails)" in code)
+    check("and is not guarded out", "if account is not None:" not in code)
+
+
 def test_mark_read_store():
     print("\nmark-read store")
 
@@ -427,23 +464,36 @@ def test_mark_read_store():
         fake = FakeIMAP()
         seen = {}
 
-        def fake_connect(folder="INBOX", readonly=True):
+        # Signature must mirror the real _connect(account, folder, readonly).
+        # It used to be (folder, readonly), which is exactly how mark_read
+        # came to pass "INBOX" in as the account dict without anything
+        # noticing.
+        def fake_connect(account=None, folder="INBOX", readonly=True):
             seen["readonly"] = readonly
+            seen["account"] = account
+            seen["folder"] = folder
             return fake
 
         t._connect = fake_connect
-        t.mark_read(["1", "2", "3"], "INBOX")
+        acct = {"user": "a@b.com", "pass": "p", "name": "n",
+                "host": "imap.gmail.com"}
+        t.mark_read(["1", "2", "3"], "INBOX", acct)
         check("stores exactly the given uids", fake.stored[1] == b"1,2,3",
               str(fake.stored[1]))
         check("adds the seen flag",
               fake.stored == ("STORE", b"1,2,3", ("+FLAGS", r"(\Seen)")),
               str(fake.stored))
         check("opens a writable session", seen.get("readonly") is False)
+        # A UID only means anything on the mailbox it came from: marking one
+        # account's UIDs against another flags whatever shares that number.
+        check("writes to the account it was given",
+              seen.get("account") == acct, repr(seen.get("account")))
+        check("and to the right folder", seen.get("folder") == "INBOX")
     finally:
         t._connect = original
 
     empty = FakeIMAP()
-    t._connect = lambda folder="INBOX", readonly=True: empty
+    t._connect = lambda account=None, folder="INBOX", readonly=True: empty
     t.mark_read([], "INBOX")
     check("empty list issues no store", empty.stored is None)
     t._connect = original
@@ -943,7 +993,7 @@ if __name__ == "__main__":
     for fn in (test_rejections, test_actions, test_sender_classification,
                test_body_extraction, test_hostile_input, test_clean,
                test_kind, test_priority, test_sender_name,
-               test_compose, test_search, test_stale, test_accounts,
+               test_mark_groups, test_compose, test_search, test_stale, test_accounts,
                test_tracker, test_ui_render, test_siri_log, test_session,
                test_window, test_selection,
                test_fetch_map, test_listing_invalidation,

@@ -904,13 +904,18 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
     } for n, e in enumerate(emails, start=1)})
 
     # The one deliberate write: what you've seen stops reappearing. Mail
-    # that needs a reply, or is HIGH priority, is skipped — it stays
-    # unread so it still needs you. Dropped (never-shown) mail is not
-    # touched either.
-    # Note: mark_read is per-account, so we'd need to group by account
-    # For now, skip mark_read in multi-account mode to be safe
-    if account is not None:  # single account mode
-        mark_read(_readable_ids(emails), folder)
+    # that needs a reply, or is HIGH priority, is skipped — it stays unread
+    # so it still needs you. Dropped (never-shown) mail is not touched.
+    #
+    # Grouped by account, because a UID only means anything on the mailbox
+    # it came from — marking account 2's UIDs against account 1 would flag
+    # whatever happened to share that number. This used to be guarded by
+    # `if account is not None`, which is false on every normal call
+    # (account=None means "all configured"), so nothing was ever marked and
+    # the same mail came back every morning.
+    for acct_name, uids in _mark_groups(emails).items():
+        acct = next((a for a in accounts if a["name"] == acct_name), None)
+        mark_read(uids, folder, acct or (accounts[0] if accounts else None))
 
     head = (f"{total_count} emails total across {len(accounts)} account(s). "
             f"Showing {len(emails)}")
@@ -1155,7 +1160,25 @@ def _readable_ids(emails):
             if e["kind"] != "action" and e["priority"] != "HIGH"]
 
 
-def mark_read(ids, folder="INBOX"):
+def _mark_groups(emails):
+    """
+    {account name: [uid]} for the mail safe to mark read.
+
+    Grouped because a UID only means anything on the mailbox it came from —
+    marking account 2's UIDs against account 1 would flag whatever happened
+    to share that number. Extracted from read_emails so the rule can be
+    tested: it was previously inline behind a guard that made it dead code.
+    """
+    groups = {}
+    for e in emails:
+        if e["kind"] == "action" or e["priority"] == "HIGH":
+            continue
+        if e.get("uid"):
+            groups.setdefault(e.get("account", ""), []).append(e["uid"])
+    return groups
+
+
+def mark_read(ids, folder="INBOX", account=None):
     """
     Set \\Seen on the given UIDs. Best effort — never raises.
 
@@ -1172,7 +1195,10 @@ def mark_read(ids, folder="INBOX"):
     if not ids or not MARK_READ:
         return
     try:
-        m = _connect(folder, readonly=False)
+        # account first: the signature is (account, folder, readonly), and
+        # passing the folder positionally handed "INBOX" in as the account
+        # dict — so this raised on account["user"] every time it ran.
+        m = _connect(account, folder, readonly=False)
         try:
             typ, _ = m.uid("STORE", b",".join(ids), "+FLAGS", r"(\Seen)")
             if typ != "OK":
