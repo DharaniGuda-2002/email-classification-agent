@@ -45,7 +45,8 @@ fi
 
 clear
 printf '%s%s%s\n' "$CYAN" "$BOX_TOP" "$RESET"
-printf '%s│%s       %s📬  Mail Agent%s       %s│%s\n' "$CYAN" "$RESET" "$BOLD" "$RESET" "$CYAN" "$RESET"
+printf '%s│%s       %s📬  Mail Agent%s       %s│%s\n' \\
+       "$CYAN" "$RESET" "$BOLD" "$RESET" "$CYAN" "$RESET"
 printf '%s%s%s\n\n' "$CYAN" "$BOX_BOT" "$RESET"
 printf '  %sStarting inbox triage...%s\n\n' "$GREEN" "$RESET"
 sleep 1
@@ -65,7 +66,7 @@ def main():
     if ICON.exists():
         try:
             subprocess.run(["fileicon", "set", str(OUT), str(ICON)],
-                          check=False, capture_output=True)
+                           check=False, capture_output=True)
         except (OSError, subprocess.SubprocessError):
             pass
 

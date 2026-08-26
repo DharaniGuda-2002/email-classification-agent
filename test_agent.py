@@ -269,12 +269,29 @@ def test_sender_name():
     check("generic display name is skipped",
           t._sender_name("Human Resources <no_reply@humanresources.grifols.com>")
           == "grifols")
-    check("real display name is kept",
+    # "Careers" is department noise like "Recruiting Team", and the tracker
+    # already drops it — the triage line now agrees rather than showing the
+    # same sender two ways.
+    check("department noise is dropped",
           t._sender_name("Starbucks Careers <hiring@jobs.starbucks.com>")
-          == "Starbucks Careers")
+          == "Starbucks")
     check("person's name is kept",
           t._sender_name("Jane Smith <jane@ncsu.edu>") == "Jane Smith")
     check("empty header does not crash", t._sender_name("") == "unknown")
+
+    # The ATS and department noise is as unhelpful on a triage line as it is
+    # in the tracker: these name the machinery, not the sender.
+    check("strips the ATS from a display name",
+          t._sender_name('"Mitchell International, Inc. @ icims" <x@y.com>')
+          == "Mitchell International, Inc")
+    check("strips 'Recruiting Team'",
+          t._sender_name("Envoy Recruiting Team <a@b.com>") == "Envoy")
+    # ...but a real name must survive intact.
+    check("a person's name is untouched",
+          t._sender_name("Sarah Miller <s@x.com>") == "Sarah Miller")
+    check("a product name is untouched",
+          t._sender_name("Roblox Assessment <r@roblox.com>")
+          == "Roblox Assessment")
 
 
 # ------------------------------------------------------------------ windows
@@ -338,6 +355,23 @@ def test_listing_invalidation():
 
     def boom(*a, **k):
         raise RuntimeError("no mailbox")
+
+    # Also with no mailbox configured at all — that exit is taken before the
+    # connection is even attempted, and on a fresh clone it was the one that
+    # actually fired, leaving both caches live.
+    saved = {k: os.environ.pop(k) for k in list(os.environ)
+             if k.startswith("EMAIL_")}
+    try:
+        t._LAST_FETCH.update({1: b"1"})
+        t._LAST_RECORDS.update({1: {"kind": "action"}})
+        try:
+            t.read_emails()
+        except RuntimeError:
+            pass
+        check("no mailbox clears old numbers", t._LAST_FETCH == {})
+        check("no mailbox clears old records", t._LAST_RECORDS == {})
+    finally:
+        os.environ.update(saved)
 
     t._LAST_FETCH.update({1: b"1"})
     t._LAST_RECORDS.update({1: {"kind": "action"}})

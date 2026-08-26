@@ -29,3 +29,6 @@ schedule.log
 
 # Application pipeline (company names from your mail)
 .applications.json
+
+# Local editor/tool config
+.claude/

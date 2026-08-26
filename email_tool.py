@@ -764,6 +764,14 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
 
     Over `limit`, low-priority mail is shed first and the drop is reported.
     """
+    # Cleared before anything can fail. A listing that raises must not leave
+    # the previous one's numbers and records live: brief() and links() read
+    # them, so a stale cache reports yesterday's mail as today's. The accounts
+    # check below is a real exit — it fired on a fresh clone with no .env and
+    # left the caches untouched.
+    _LAST_FETCH.clear()
+    _LAST_RECORDS.clear()
+
     accounts = get_accounts() if account is None else [account]
     if not accounts:
         raise RuntimeError("No email accounts configured.")
@@ -1069,7 +1077,14 @@ def _sender_name(from_header):
     "us". Generic display names get the same treatment — "Human Resources"
     names nobody.
     """
+    # The ATS and department noise that tracker strips from a company name is
+    # just as unhelpful on a triage line: "Mitchell International @ icims" and
+    # "Envoy Recruiting Team" name the machinery, not the sender.
     name, addr = parseaddr(from_header or "")
+    if name:
+        trimmed = tracker.NOISE_SUFFIX.sub("", name).strip(" .,-–—:")
+        if len(trimmed) >= 3:
+            name = trimmed
     domain = addr.split("@")[-1] if "@" in (addr or "") else ""
     labels = [p for p in domain.split(".") if p]
     company = labels[-2] if len(labels) >= 2 else (labels[0] if labels else "")
@@ -1177,6 +1192,7 @@ if __name__ == "__main__":
 
 def _shorten(text, limit):
     """Trim to `limit`, breaking at a space so words stay whole."""
+    text = "" if text is None else str(text)
     if len(text) <= limit:
         return text
     cut = text[:limit].rsplit(" ", 1)[0]

@@ -374,7 +374,7 @@ def _reflow(body):
     what actually gets sent, which is the one thing a confirmation step has to
     guarantee. Normalising here means both are the same text.
     """
-    paragraphs = re.split(r"\n\s*\n", body)
+    paragraphs = re.split(r"\n\s*\n", str(body or ""))
     return "\n\n".join(" ".join(p.split()) for p in paragraphs if p.strip())
 
 
@@ -438,31 +438,30 @@ BANNER = "\n" + "\n".join([
     "  " + ui.rule(),
     "  " + ui.dim("Marks what you've seen as read · important mail stays unread"),
     "",
-    "  " + ui.bold("Try asking"),
+    "  " + ui.bold("Ask anything"),
     ui.dim("    what needs my attention?"),
-    ui.dim("    summarize my unread mail"),
+    ui.dim("    how many rejections do I have?"),
+    ui.dim("    anything from Google?"),
     ui.dim("    what came in the last 3 days?"),
-    ui.dim("    anything in promotions worth keeping?"),
     "",
-    "  " + ui.bold("Run it on a schedule"),
-    _cmd("check every 2 hours", "also 30 minutes, 4h, 6h…"),
-    _cmd("status", "what's scheduled right now"),
-    _cmd("stop", "cancel the schedule"),
-    "",
-    "  " + ui.bold("Commands"),
+    "  " + ui.bold("Your job hunt"),
     _cmd("applications", "where every application stands"),
+    _cmd("waiting", "the ones with no reply yet"),
+    _cmd("3 is a rejection", "teach it a tag it got wrong"),
     "",
     "  " + ui.bold("Write an email"),
     _cmd("draft to x@y.com …", "compose, review, then send"),
-    _cmd("draft from work to …", "pick which mailbox it comes from"),
+    _cmd("draft from work to …", "pick which mailbox it leaves from"),
     _cmd("reply to 3", "reply to one from the last listing"),
-    _cmd("send · edit · cancel", "what to say once a draft is shown"),
+    ui.dim("    then: send · edit <what to change> · cancel"),
     "",
-    "  " + ui.bold("Commands"),
-    _cmd("waiting", "applications with no reply yet"),
-    _cmd("accounts", "which mailboxes are connected"),
+    "  " + ui.bold("Run it on a schedule"),
+    _cmd("check every 2 hours", "also 30 minutes, 4h, 6h…"),
+    _cmd("status  ·  stop", "what's scheduled  ·  cancel it"),
+    "",
+    "  " + ui.bold("Everything else"),
     _cmd("links", "Gmail links for the last listing"),
-    _cmd("3 is a rejection", "teach it a tag it got wrong"),
+    _cmd("accounts", "which mailboxes are connected"),
     _cmd("new", "start a fresh conversation"),
     _cmd("help  ·  quit", "show this again  ·  leave"),
     "",
@@ -825,14 +824,20 @@ def main(argv=None):
         # Scheduling intents — handled in code, not by the model.
         # "check every 2 hours", "schedule every 30 minutes", "stop checking"
         if scheduler.STATUS_RE.match(user):
+            print()
             _say(scheduler.status(), ui.cyan)
+            print()
             continue
         if scheduler.STOP_RE.match(user):
+            print()
             _say(scheduler.unschedule(), ui.green)
+            print()
             continue
         hours = scheduler.parse_interval(user)
         if hours is not None:
+            print()
             _say(scheduler.schedule(hours), ui.green)
+            print()
             continue
 
         # The status line shown by ask() is erased before this prints, so the
