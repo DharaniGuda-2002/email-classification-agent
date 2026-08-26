@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # One command for everything. Creates the venv, checks config, runs.
 #
-#   ./mail help      grouped list of every command (start here)
-#   ./mail           start chatting with your inbox
-#   ./mail brief     one short summary, no model prose (what Siri runs)
-#   ./mail once "…"  a single question, no chat
-#   ./mail log       what Siri asked and answered
-#   ./mail shortcut  build the double-click Siri shortcut
-#   ./mail test      offline test suite
-#   ./mail check     preflight only
+#   ./mabel help      grouped list of every command (start here)
+#   ./mabel           start chatting with your inbox
+#   ./mabel brief     one short summary, no model prose (what Siri runs)
+#   ./mabel once "…"  a single question, no chat
+#   ./mabel log       what Siri asked and answered
+#   ./mabel shortcut  build the double-click Siri shortcut
+#   ./mabel test      offline test suite
+#   ./mabel check     preflight only
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -24,8 +24,8 @@ else
 fi
 
 usage() {
-  printf '\n  %s📬  Mail%s   %syour inbox triage agent%s\n\n' "$A" "$R" "$D" "$R"
-  printf '  %sUsage:%s ./mail [command]   %s(no command = start chatting)%s\n\n' \
+  printf '\n  %s📬  Mabel%s   %syour inbox triage agent%s\n\n' "$A" "$R" "$D" "$R"
+  printf '  %sUsage:%s ./mabel [command]   %s(no command = start chatting)%s\n\n' \
          "$B" "$R" "$D" "$R"
 
   printf '  %sEveryday%s\n' "$B" "$R"

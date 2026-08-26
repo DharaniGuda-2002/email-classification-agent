@@ -1,6 +1,6 @@
 # Asking Siri to check your email
 
-"Hey Siri, Check My Emails" → it runs the agent and shows today's summary on
+"Hey Siri, Mabel" → it runs the agent and shows today's summary on
 screen (Siri reads the card aloud as it appears):
 
 > 26 new emails today.
@@ -19,7 +19,7 @@ seconds. Everything runs on your Mac.
 ## Install it (no manual building)
 
 ```bash
-./mail shortcut
+./mabel shortcut
 ```
 
 That generates **two signed shortcuts**, then asks if you want to open them.
@@ -28,30 +28,30 @@ You never build actions by hand.
 
 | shortcut | say | does |
 |---|---|---|
-| Check My Emails | "Hey Siri, Check My Emails" | today's summary, no question |
-| Ask My Email | "Hey Siri, Ask My Email" | asks what you want, then answers |
+| Mabel | "Hey Siri, Mabel" | today's summary, no question |
+| Ask Mabel | "Hey Siri, Ask Mabel" | asks what you want, then answers |
 
-**Ask My Email** is the conversational one: Siri prompts, you say *"any
+**Ask Mabel** is the conversational one: Siri prompts, you say *"any
 interviews this week?"*, it answers. It shares memory with the terminal chat,
 so a follow-up in the same 15 minutes still knows what you meant.
 
 If you skipped the prompt, install it later with:
 
 ```bash
-open "Check My Emails.shortcut"
+open "Mabel.shortcut"
 ```
 
-Then say **"Hey Siri, Check My Emails."**
+Then say **"Hey Siri, Mabel."**
 
 The shortcut embeds this project's path, so if you move the folder, run
-`./run.sh --shortcut` again.
+`./mabel shortcut` again.
 
 ### What it contains
 
 Two actions: **Run Shell Script** (runs `shortcuts/check-emails.sh`, which
 does `run.sh --brief`) and **Show Result** (displays the reply on screen). The
 shell action blocks until the model replies, which is why Siri waits for the
-real answer. The conversational shortcut ("Ask My Email") is three actions —
+real answer. The conversational shortcut ("Ask Mabel") is three actions —
 Ask for Input, Run Shell Script, Show Result — so Siri can take your question.
 
 ---
@@ -119,8 +119,8 @@ but the model didn't answer in time.
 
 ## Building it by hand
 
-Only if `./run.sh --shortcut` fails to sign. In the **Shortcuts** app, new
-shortcut named **Check My Emails**, two actions:
+Only if `./mabel shortcut` fails to sign. In the **Shortcuts** app, new
+shortcut named **Mabel**, two actions:
 
 1. **Run Shell Script** — Shell `/bin/zsh`, script:
    ```

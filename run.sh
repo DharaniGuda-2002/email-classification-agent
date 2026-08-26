@@ -59,10 +59,10 @@ if [ "${1:-}" = "--shortcut" ]; then
     if [ "$reply" = "y" ] || [ "$reply" = "Y" ]; then
         # One at a time: Shortcuts shows a modal per import, and opening both
         # at once stacks them so the second looks like nothing happened.
-        open "Check My Emails.shortcut"
+        open "Mabel.shortcut"
         printf 'Click Add Shortcut, then press Return for the second one. '
         read -r _
-        open "Ask My Email.shortcut"
+        open "Ask Mabel.shortcut"
     fi
     exit 0
 fi

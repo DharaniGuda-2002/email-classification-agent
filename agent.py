@@ -434,9 +434,10 @@ def _cmd(name, desc):
 
 
 BANNER = "\n" + "\n".join([
-    "  " + cyan_bold("📬  Inbox triage"),
+    "  " + cyan_bold("📬  Mabel"),
     "  " + ui.rule(),
-    "  " + ui.dim("Marks what you've seen as read · important mail stays unread"),
+    "  " + ui.dim("Inbox triage · marks what you've seen as read · "
+                  "important mail stays unread"),
     "",
     "  " + ui.bold("Ask anything"),
     ui.dim("    what needs my attention?"),

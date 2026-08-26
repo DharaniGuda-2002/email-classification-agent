@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent
-LABEL = "com.yaswanth.mailagent"
+LABEL = "com.yaswanth.mabel"
 PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 LOG = PROJECT / "schedule.log"
 
@@ -91,7 +91,7 @@ def schedule(hours):
     Install or replace the job. Returns a sentence for the user.
     """
     seconds = int(hours * 3600)
-    runner = PROJECT / "mail"
+    runner = PROJECT / "mabel"
     if not runner.exists():
         return f"Cannot schedule: {runner} is missing."
 

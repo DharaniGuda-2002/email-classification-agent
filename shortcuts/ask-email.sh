@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The script the "Ask My Email" Siri shortcut runs. Reads the spoken question
+# The script the "Ask Mabel" Siri shortcut runs. Reads the spoken question
 # on stdin, prints the answer, nothing else.
 #
 # Separate from check-emails.sh because that one is the fixed fast summary;

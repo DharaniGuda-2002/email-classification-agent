@@ -1,4 +1,4 @@
-# inbox-triage
+# Mabel
 
 An email agent that runs entirely on your own Mac. A local LLM reads your
 inbox, separates what needs a reply from what doesn't, tracks where your job
@@ -37,11 +37,11 @@ You need [LM Studio](https://lmstudio.ai) with a tool-capable model (Qwen 2.5
 ```bash
 git clone https://github.com/DharaniGuda-2002/email-classification-agent.git
 cd email-classification-agent
-./mail
+./mabel
 ```
 
 The first run builds the virtualenv, installs dependencies, writes a `.env`
-template and stops. Fill in three values, run `./mail` again, and you're
+template and stops. Fill in three values, run `./mabel` again, and you're
 chatting with your inbox.
 
 ```bash
@@ -67,18 +67,18 @@ app password — a separate credential you can revoke on its own.
 
 If Gmail rejects it, enable IMAP: Gmail → Settings → Forwarding and POP/IMAP.
 
-`./mail check` tells you whether reading and sending both work.
+`./mabel check` tells you whether reading and sending both work.
 
 ---
 
 ## Using it
 
 ```bash
-./mail                          # chat with your inbox
-./mail brief                    # one short summary, fast
-./mail once "any interviews?"   # a single question, then exit
-./mail apps                     # where every application stands
-./mail help                     # every command
+./mabel                          # chat with your inbox
+./mabel brief                    # one short summary, fast
+./mabel once "any interviews?"   # a single question, then exit
+./mabel apps                     # where every application stands
+./mabel help                     # every command
 ```
 
 Ask it anything:
@@ -164,16 +164,16 @@ only moves forward, so a later "thanks for applying" can't un-reject you.
 ### Siri
 
 ```bash
-./mail shortcut
+./mabel shortcut
 ```
 
 Builds two signed shortcuts — click **Add Shortcut** once each.
 
-- **"Hey Siri, Check My Emails"** — today's summary on screen.
-- **"Hey Siri, Ask My Email"** — asks what you want, then answers.
+- **"Hey Siri, Mabel"** — today's summary on screen.
+- **"Hey Siri, Ask Mabel"** — asks what you want, then answers.
 
 Roughly 20s, since LM Studio unloads an idle model after an hour. Every voice
-run is logged to `siri.log` (`./mail log`) — Siri runs headless, so without
+run is logged to `siri.log` (`./mabel log`) — Siri runs headless, so without
 that a blank card leaves nothing to debug.
 
 ### On a schedule
@@ -278,16 +278,16 @@ categories collapse to `primary` and the Gmail links disappear.
 | `cannot reach your mailbox` | app password wrong, or IMAP off in Gmail |
 | `no server at localhost:1234` | run `lms bootstrap` once; it self-starts after |
 | `MODEL "x" is not loaded` | the id must match LM Studio exactly |
-| Siri says nothing | check `./mail log`; re-run `./mail shortcut` if you moved the folder |
+| Siri says nothing | check `./mabel log`; re-run `./mabel shortcut` if you moved the folder |
 | A tag is wrong | say `3 is a rejection` |
-| Missing emails | `./mail --days 3`, or set `MARK_READ=false` |
+| Missing emails | `./mabel --days 3`, or set `MARK_READ=false` |
 
 ---
 
 ## Tests
 
 ```bash
-./mail test
+./mabel test
 ```
 
 252 tests, no network or mailbox needed. Most are regressions — each one a

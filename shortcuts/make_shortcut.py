@@ -8,7 +8,7 @@ Builds a two-action shortcut — Run Shell Script, Show Result — and signs it
 with macOS's own `shortcuts` tool so Shortcuts will accept it. No manual
 building in the Shortcuts app; you click "Add Shortcut" once and you are done.
 
-Saying "Hey Siri, Check My Emails" runs the agent and shows the brief on
+Saying "Hey Siri, Mabel" runs the agent and shows the brief on
 screen. The Run Shell Script action blocks until the model replies, so Siri
 waits for the real answer rather than a placeholder.
 
@@ -26,10 +26,10 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 RUNNER = PROJECT / "shortcuts" / "check-emails.sh"
 ASK_RUNNER = PROJECT / "shortcuts" / "ask-email.sh"
-ICON = PROJECT / "assets" / "MailAgent.icns"
+ICON = PROJECT / "assets" / "Mabel.icns"
 
-NAME = "Check My Emails"          # fixed summary
-ASK_NAME = "Ask My Email"         # conversational
+NAME = "Mabel"                    # fixed summary
+ASK_NAME = "Ask Mabel"            # conversational
 OUT = PROJECT / f"{NAME}.shortcut"
 ASK_OUT = PROJECT / f"{ASK_NAME}.shortcut"
 
@@ -65,13 +65,13 @@ def _guarded(runner):
         f'S={_quote(runner)}\n'
         f'if [ -x "$S" ]; then "$S"; else\n'
         f'  echo "Email agent not found at $S."\n'
-        f'  echo "It probably moved. Reinstall: run ./mail shortcut there."\n'
+        f'  echo "It probably moved. Reinstall: run ./mabel shortcut there."\n'
         f'fi\n'
     )
 
 
 def _envelope(actions):
-    # Embed the custom MailAgent icon (ICNS -> base64 PNG data for shortcuts)
+    # Embed the custom Mabel icon (ICNS -> base64 PNG data for shortcuts)
     icon_data = ""
     if ICON.exists():
         try:

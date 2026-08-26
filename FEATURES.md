@@ -21,15 +21,15 @@ the Mermaid extension).
 
 | Feature | Entry point | What it does |
 |---|---|---|
-| Terminal chat | `./mail` | Colored, memory-backed conversation |
-| One-shot question | `./mail once "…"` | A single question, then exit |
-| Fast brief | `./mail brief` | Fixed summary in seconds, no model prose |
-| Siri shortcuts | `./mail shortcut` | "Check My Emails" + "Ask My Email" |
-| Desktop launcher | `./mail desktop` | Double-click chat app on the Desktop |
-| Preflight | `./mail check` | Verifies venv, `.env`, mailbox, model |
-| Offline tests | `./mail test` | 133+ regression tests, no network |
-| Siri log | `./mail log` | What Siri asked and answered |
-| Forget | `./mail forget` | Clears saved conversations |
+| Terminal chat | `./mabel` | Colored, memory-backed conversation |
+| One-shot question | `./mabel once "…"` | A single question, then exit |
+| Fast brief | `./mabel brief` | Fixed summary in seconds, no model prose |
+| Siri shortcuts | `./mabel shortcut` | "Mabel" + "Ask Mabel" |
+| Desktop launcher | `./mabel desktop` | Double-click chat app on the Desktop |
+| Preflight | `./mabel check` | Verifies venv, `.env`, mailbox, model |
+| Offline tests | `./mabel test` | 133+ regression tests, no network |
+| Siri log | `./mabel log` | What Siri asked and answered |
+| Forget | `./mabel forget` | Clears saved conversations |
 | Scheduled digest | *scheduler.py* | launchd digest on a plain-English interval |
 | Mark mail read | automatic | seen mail stops reappearing; important stays unread |
 
@@ -40,7 +40,7 @@ the Mermaid extension).
 ```mermaid
 flowchart TD
     A["You"] --> B{"Which command?"}
-    B -->|"./mail"| C["Terminal chat"]
+    B -->|"./mabel"| C["Terminal chat"]
     B -->|"brief"| D["Fast summary"]
     B -->|"once …"| E["One-shot question"]
     B -->|"shortcut"| G["Siri shortcuts"]
@@ -70,7 +70,7 @@ flowchart TD
 
 ### A question becomes an answer
 
-1. You run `./mail` (chat), `./mail once "…"` (one-shot), or a Siri shortcut.
+1. You run `./mabel` (chat), `./mabel once "…"` (one-shot), or a Siri shortcut.
 2. `run.sh` preflights in order — venv, `.env`, IMAP login, LM Studio server —
    so a failure names the one thing that is wrong.
 3. `agent.py` starts a loop: it sends the conversation to the model, and the
@@ -137,7 +137,7 @@ wording nobody wrote a rule for.
 
 ## The features, one by one
 
-### 1. Terminal chat — `./mail`
+### 1. Terminal chat — `./mabel`
 
 The main event. A colored, readline-enabled REPL:
 
@@ -167,24 +167,24 @@ Anything else is sent to the model. The chat keeps its own session (`terminal`),
 separate from the voice one, so a half-finished spoken question never bleeds
 into what you are typing.
 
-**Use it:** `./mail` — or `./mail --days 3` to start three days back.
+**Use it:** `./mabel` — or `./mabel --days 3` to start three days back.
 
-### 2. One-shot question — `./mail once "…"`
+### 2. One-shot question — `./mabel once "…"`
 
 Ask one question, get one answer, exit. No banner, no prompt.
 
 ```bash
-./mail once "any interviews this week?"
-./mail once "anything in promotions worth keeping?"
-./mail once --days 7 "summarize everything from last week"
+./mabel once "any interviews this week?"
+./mabel once "anything in promotions worth keeping?"
+./mabel once --days 7 "summarize everything from last week"
 ```
 
-- `./mail once` with **no text** falls back to the standard triage — that is
+- `./mabel once` with **no text** falls back to the standard triage — that is
   what cron uses.
-- Any **unknown word** to `./mail` is treated as a question: `./mail any
+- Any **unknown word** to `./mabel` is treated as a question: `./mabel any
   interviews?` works the same as the `once` form above.
 
-### 3. Fast brief — `./mail brief`
+### 3. Fast brief — `./mabel brief`
 
 A fixed, multi-line summary built entirely from tags computed in code — no
 model loop writing prose — so it returns in seconds instead of a minute-plus.
@@ -208,26 +208,26 @@ format serves both.
 - **Email delivery failures / bounces** — "Delivery Status Notification", "undelivered mail", "mailbox full", "recipient rejected", "host unknown", "spam rejected", "blacklist"
 - **LinkedIn / job platform rejections** — "application status: rejected", "we regret to inform you that your application was declined" from LinkedIn, Indeed, Glassdoor, etc.
 
-### 4. Siri shortcuts — `./mail shortcut`
+### 4. Siri shortcuts — `./mabel shortcut`
 
 Generates **two signed shortcuts** you install by clicking Add Shortcut:
 
 | Shortcut | Say | Does |
 |---|---|---|
-| Check My Emails | "Hey Siri, Check My Emails" | today's summary, on screen in ~20s |
-| Ask My Email | "Hey Siri, Ask My Email" | asks what you want, then answers |
+| Mabel | "Hey Siri, Mabel" | today's summary, on screen in ~20s |
+| Ask Mabel | "Hey Siri, Ask Mabel" | asks what you want, then answers |
 
-`Ask My Email` is a conversation — it passes `--session siri`, so a follow-up
+`Ask Mabel` is a conversation — it passes `--session siri`, so a follow-up
 in the same 15 minutes still knows what you meant. Setup, timing and
 troubleshooting live in **[shortcuts/README.md](shortcuts/README.md)**.
 
-### 5. Desktop launcher — `./mail desktop`
+### 5. Desktop launcher — `./mabel desktop`
 
-Drops a double-clickable **`Mail Agent.command`** on `~/Desktop`. Double-click
+Drops a double-clickable **`Mabel.command`** on `~/Desktop`. Double-click
 it and a Terminal window opens straight into the chat; the window stays open
 after you quit so you can read the session.
 
-- The project path is embedded — **re-run `./mail desktop` if you move the
+- The project path is embedded — **re-run `./mabel desktop` if you move the
   folder** (the launcher tells you if it can't find the agent).
 - The same command is idempotent: running it again just rewrites the file.
 
@@ -245,7 +245,7 @@ Parses plain-English intervals, installs a macOS launchd LaunchAgent
 
 The chat (`You:` prompt) and the `--once` path both detect scheduling phrases
 in code, before the model sees them, so email text can never trigger a job.
-The launchd job runs `./mail brief --notify`, which sends a macOS notification
+The launchd job runs `./mabel brief --notify`, which sends a macOS notification
 with the digest — failures notify too, so a broken digest is visible. Idempotent:
 setting a new interval replaces the job rather than stacking a second one.
 
@@ -266,7 +266,7 @@ Agent: Seven over three days: Adobe, Notion, Hinge Health, Stripe, …
 - **Expire after 15 minutes** — a "today" from this morning should not still
   be in context tonight.
 - Capped at 40 messages so a long chat can't run away with the context window.
-- `new` in the chat, or `./mail forget`, clears it.
+- `new` in the chat, or `./mabel forget`, clears it.
 
 ### 9. Tag corrections — teaching it a kind
 
@@ -288,7 +288,7 @@ in code from `X-GM-THRID` — deliberately never shown to the model, because a
 small model garbles long URLs when repeating them. `links` shows every link in
 the last listing; otherwise only important ones.
 
-### 11. Siri logging — `./mail log`
+### 11. Siri logging — `./mabel log`
 
 Every voice run appends a timestamped line to `siri.log` — the request, the
 reply, and any error. Siri runs headless, so without this a blank card leaves
@@ -297,19 +297,19 @@ finished (usually the model was still loading). The file holds email subjects
 and senders, so it is gitignored.
 
 ```bash
-./mail log        # last 40 lines
-./mail log 200    # last 200 lines
+./mabel log        # last 40 lines
+./mabel log 200    # last 200 lines
 tail -f siri.log  # follow live
 ```
 
-### 12. Preflight — `./mail check`
+### 12. Preflight — `./mabel check`
 
 `run.sh --check` walks the four things the agent needs, in order, so a failure
 names the one thing that is wrong: venv + dependencies, `.env`, IMAP login,
 and the LM Studio server/model. `run.sh` runs it automatically before starting
-anything; `./mail check` runs it and stops.
+anything; `./mabel check` runs it and stops.
 
-### 13. Offline tests — `./mail test`
+### 13. Offline tests — `./mabel test`
 
 133 regression tests with **no network, no mailbox, no model** — they run on
 constructed messages, so they work on a fresh clone. Most are regressions: each
@@ -340,17 +340,17 @@ is marked read. Mail that was dropped because the listing hit its limit is
 ## Command reference
 
 ```bash
-./mail                    # chat with your inbox
-./mail brief              # fast fixed summary (what Siri runs)
-./mail once "…"           # a single question, then exit
-./mail log [N]            # what Siri asked and answered (last N lines)
-./mail shortcut           # build the two Siri shortcuts
-./mail desktop            # put a chat launcher on the Desktop
-./mail check              # preflight only, don't start
-./mail test               # offline test suite
-./mail forget             # clear saved conversations
-./mail help               # this list
-./mail <anything else>    # treated as a question
+./mabel                    # chat with your inbox
+./mabel brief              # fast fixed summary (what Siri runs)
+./mabel once "…"           # a single question, then exit
+./mabel log [N]            # what Siri asked and answered (last N lines)
+./mabel shortcut           # build the two Siri shortcuts
+./mabel desktop            # put a chat launcher on the Desktop
+./mabel check              # preflight only, don't start
+./mabel test               # offline test suite
+./mabel forget             # clear saved conversations
+./mabel help               # this list
+./mabel <anything else>    # treated as a question
 
 --days N                  # how far back to look, default 1
 ```
@@ -359,11 +359,11 @@ is marked read. Mail that was dropped because the listing hit its limit is
 
 | Task | How |
 |---|---|
-| What needs my attention | `./mail` or `./mail once "what needs my attention?"` |
+| What needs my attention | `./mabel` or `./mabel once "what needs my attention?"` |
 | Rejections / interviews / confirmations | any question naming them |
 | Bounced / delivery-failed emails | detected automatically as rejections |
 | LinkedIn / job platform rejections | detected automatically as rejections |
-| Summarize a sender or a day | `./mail once "summarize what Google sent"` |
+| Summarize a sender or a day | `./mabel once "summarize what Google sent"` |
 | Check spam for real mail | `read_emails(category="spam")` via a question |
 | Look further back | `--days 3`, or "the last 3 days" in conversation |
 | Fix a wrong tag | `3 is a rejection` |
