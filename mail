@@ -75,6 +75,9 @@ case "$cmd" in
       [ -f siri.log ] || { echo "No Siri runs logged yet."; exit 0; }
       exec tail -n "${1:-40}" siri.log
       ;;
+  apps|applications|pipeline)
+      exec .venv/bin/python -c "import ui, tracker; print(ui.render(tracker.report()))"
+      ;;
   forget)
       rm -rf .sessions && echo "Conversation cleared."
       ;;

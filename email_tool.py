@@ -32,6 +32,7 @@ from html.parser import HTMLParser
 from dotenv import load_dotenv
 
 import classifier
+import tracker
 
 load_dotenv()
 
@@ -1173,6 +1174,10 @@ def triage_report(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
     read_emails(unread_only=True, limit=limit, days=days,
                 include_snippets=True, max_model_calls=20, account=account)
     records = list(_LAST_RECORDS.values())
+
+    # Fold what arrived into the application pipeline. Done here rather than
+    # behind its own command so it stays current without being remembered.
+    tracker.record(records)
 
     window = "today" if days == 1 else f"the last {days} days"
     if not records:

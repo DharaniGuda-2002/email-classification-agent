@@ -26,3 +26,6 @@ siri.log
 
 # Scheduled-run log (scheduler.py)
 schedule.log
+
+# Application pipeline (company names from your mail)
+.applications.json

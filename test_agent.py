@@ -471,6 +471,71 @@ def test_gmail_links():
 
 # ------------------------------------------------------------------- config
 
+def test_tracker():
+    print("\napplication tracker")
+    import tracker
+    original = tracker.STORE
+    tmp = __import__("pathlib").Path("/tmp/apps_test.json")
+    try:
+        tracker.STORE = tmp
+        tmp.unlink(missing_ok=True)
+
+        # The company is in the subject, not the From: LinkedIn and the ATS
+        # platforms relay the mail, so the sender names them, not the employer.
+        def co(subject, sender="LinkedIn <x@linkedin.com>"):
+            return tracker.company_of({"subject": subject, "from": sender})
+
+        check("'was sent to X'", co("your application was sent to Wilson Elser")
+              == "Wilson Elser")
+        check("'thank you for applying to X'",
+              co("Thank you for applying to TheGuarantors") == "TheGuarantors")
+        check("'applied to a position at X'",
+              co("You've applied to a position at Analog Devices - Analyst")
+              == "Analog Devices")
+
+        # The employer arrives wrapped in the machinery that sent it.
+        plain = {"subject": "no match here"}
+        check("strips the ATS", tracker.company_of(
+            {**plain, "from": "Happen Bank Workday"}) == "Happen Bank")
+        check("strips '@ icims'", tracker.company_of(
+            {**plain, "from": "West Bend @ icims"}) == "West Bend")
+        check("strips 'Recruiting Team'", tracker.company_of(
+            {**plain, "from": "Envoy Recruiting Team"}) == "Envoy")
+        # A bare address is the mail server, not an employer worth listing.
+        check("bare address is unknown", tracker.company_of(
+            {**plain, "from": "no-reply@us.greenhouse-mail.io"}) == "unknown")
+
+        # Same employer, two spellings — subject line vs sender.
+        check("merge key normalises",
+              tracker._key("Wilson Elser") == tracker._key("wilsonelser"))
+
+        tracker.record([{"subject": "Thank you for applying to Acme",
+                         "from": "x", "kind": "confirmation"}])
+        check("confirmation records as applied",
+              tracker._load()[tracker._key("Acme")]["status"] == "applied")
+
+        # These arrive out of order, so the worst outcome must win: a later
+        # "thanks for applying" cannot un-reject you.
+        tracker.record([{"subject": "Thank you for applying to Acme",
+                         "from": "x", "kind": "rejection"}])
+        check("rejection overrides applied",
+              tracker._load()[tracker._key("Acme")]["status"] == "rejected")
+        tracker.record([{"subject": "Thank you for applying to Acme",
+                         "from": "x", "kind": "confirmation"}])
+        check("status never moves backwards",
+              tracker._load()[tracker._key("Acme")]["status"] == "rejected")
+
+        check("untagged mail is ignored",
+              tracker.record([{"subject": "sale", "from": "x", "kind": ""}]) == [])
+
+        tmp.write_text("{not json")
+        check("corrupt store does not raise", tracker._load() == {})
+        check("empty store reports cleanly", "No applications" in tracker.report())
+    finally:
+        tracker.STORE = original
+        tmp.unlink(missing_ok=True)
+
+
 def test_ui_render():
     print("\nterminal rendering")
     import ui
@@ -648,7 +713,7 @@ if __name__ == "__main__":
     for fn in (test_rejections, test_actions, test_sender_classification,
                test_body_extraction, test_hostile_input, test_clean,
                test_kind, test_priority, test_sender_name,
-               test_ui_render, test_siri_log, test_session,
+               test_tracker, test_ui_render, test_siri_log, test_session,
                test_window, test_selection,
                test_fetch_map, test_listing_invalidation,
                test_mark_read_selection, test_mark_read_store,

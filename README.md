@@ -146,6 +146,7 @@ never trigger them:
 
 | command | does |
 |---|---|
+| `applications` | where every application stands |
 | `links` | Gmail links for every email in the last listing |
 | `3 is a rejection` | teaches it a tag it got wrong |
 | `new` | forget the conversation and start over |
@@ -298,6 +299,42 @@ wording nobody wrote a rule for:
 Detecting a rejection requires reading the **body**. "Thanks for your interest
 in NRI" tells you nothing — scanning subjects found 0 rejections in 426
 unread; scanning bodies found them immediately.
+
+### Where your applications stand
+
+```
+You: applications
+```
+
+```
+8 applications tracked
+5 have come back to you — 62% response rate.
+
+Moving forward (2)
+  • West Bend — 2026-08-26
+
+Waiting to hear (3)
+  • Brighton — 2026-08-26
+
+Rejected (3)
+  • TheGuarantors — 2026-08-26
+```
+
+Built from mail you were reading anyway: every confirmation, rejection and
+interview the tagger identifies is recorded as the triage runs. Nothing extra
+is fetched and there is no command to remember.
+
+The employer comes from the subject before the sender, because an application
+confirmation is usually relayed — the From says LinkedIn or Workday, the
+subject says who you actually applied to. The ATS name, department and legal
+suffix are stripped: "Happen Bank Workday" is Happen Bank.
+
+Status only moves forward — applied → interview → rejected. These arrive out
+of order, and a later "thanks for applying" must not un-reject you.
+
+`./mail apps` shows the same thing from a terminal. It lives in
+`.applications.json`, gitignored because it holds company names from your
+mail.
 
 ### Correcting it
 

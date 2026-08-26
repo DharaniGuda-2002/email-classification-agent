@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 import email_tool
 import scheduler
 import session
+import tracker
 import ui
 from email_tool import (read_emails, read_email_body, DEFAULT_LIMIT,
                         HARD_LIMIT, DEFAULT_DAYS, SOFT_MAX_DAYS)
@@ -349,6 +350,7 @@ BANNER = "\n" + "\n".join([
     _cmd("stop", "cancel the schedule"),
     "",
     "  " + ui.bold("Commands"),
+    _cmd("applications", "where every application stands"),
     _cmd("links", "Gmail links for the last listing"),
     _cmd("3 is a rejection", "teach it a tag it got wrong"),
     _cmd("new", "start a fresh conversation"),
@@ -556,6 +558,12 @@ def main(argv=None):
             tint = ui.red if msg.startswith("ERROR") else ui.green
             print()
             _say(msg, tint)
+            print()
+            continue
+
+        if user.lower() in ("applications", "apps", "pipeline"):
+            print()
+            print(ui.render(tracker.report()))
             print()
             continue
 
