@@ -78,6 +78,8 @@ If Gmail rejects it, enable IMAP: Gmail → Settings → Forwarding and POP/IMAP
 ./mabel brief                    # one short summary, fast
 ./mabel once "any interviews?"   # a single question, then exit
 ./mabel apps                     # where every application stands
+./mabel desktop                  # double-clickable launcher on the Desktop
+./mabel shortcut                 # the two Siri shortcuts
 ./mabel help                     # every command
 ```
 
@@ -175,6 +177,19 @@ Builds two signed shortcuts — click **Add Shortcut** once each.
 Roughly 20s, since LM Studio unloads an idle model after an hour. Every voice
 run is logged to `siri.log` (`./mabel log`) — Siri runs headless, so without
 that a blank card leaves nothing to debug.
+
+### A launcher on the Desktop
+
+```bash
+./mabel desktop
+```
+
+Writes **`Mabel.command`** to your Desktop. Double-click it and the chat opens
+in a Terminal window — the same as running `./mabel`, without finding the
+folder first.
+
+Both this and the Siri shortcuts embed the project path, so re-run whichever
+you use if you move the folder.
 
 ### On a schedule
 
