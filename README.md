@@ -312,6 +312,23 @@ left the machine".
 
 One recipient at a time — no cc, no bcc, no lists.
 
+**With several mailboxes connected**, which one it leaves from is a decision,
+so the draft always shows `From:` and you are never guessed at:
+
+```
+You: draft from school to prof@ncsu.edu asking for an extension
+
+  Draft
+  From: you@ncsu.edu (school)
+  To: prof@ncsu.edu
+  …
+```
+
+`reply to 3` uses the mailbox the email actually arrived at — a reply to your
+professor leaves from your university address without you having to say so.
+For a new email with more than one mailbox and no `from`, it asks rather than
+picking; sending from the wrong address is not a mistake you can take back.
+
 Sending uses the same app password over SMTP, so there is nothing extra to
 configure. `./mail check` verifies the SMTP login without sending anything.
 

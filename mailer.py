@@ -79,18 +79,29 @@ class Draft:
         self.in_reply_to = in_reply_to
         self.account = account
 
-    def preview(self):
-        """The draft as markdown, for ui.render()."""
-        return (f"**Draft**\n"
-                f"To: {self.to}\n"
-                f"Subject: {self.subject}\n\n"
-                f"{self.body}")
+    def preview(self, show_from=True):
+        """
+        The draft as markdown, for ui.render().
+
+        From is shown because it is a decision, not a detail: with two
+        mailboxes connected, a reply to a professor leaving from a personal
+        Gmail is the kind of mistake a confirmation step exists to prevent.
+        """
+        head = ["**Draft**"]
+        if show_from and self.account:
+            head.append(f"From: {self.account['user']} "
+                        f"({self.account.get('name', '')})")
+        head.append(f"To: {self.to}")
+        head.append(f"Subject: {self.subject}")
+        return "\n".join(head) + f"\n\n{self.body}"
 
     def problems(self):
         """Why this cannot be sent yet, or []."""
         issues = []
         if not valid_address(self.to):
             issues.append(f"'{self.to}' is not a valid address.")
+        if not self.account:
+            issues.append("No mailbox chosen to send from.")
         if not self.subject:
             issues.append("No subject.")
         if not self.body:
@@ -162,3 +173,38 @@ def check_login(account):
         return False, f"SMTP rejected the login for {account['user']}."
     except (smtplib.SMTPException, OSError, ssl.SSLError) as exc:
         return False, f"Could not reach {host}: {exc}"
+
+
+def pick_account(accounts, hint=""):
+    """
+    Choose which mailbox to send from.
+
+    `hint` is matched against the account name, then the address, so both
+    "from school" and "from you@ncsu.edu" work. With one mailbox there is
+    nothing to choose. With several and no hint, returns None so the caller
+    can ask rather than pick — sending from the wrong address is not a
+    mistake you can take back.
+    """
+    if not accounts:
+        return None
+    if len(accounts) == 1:
+        return accounts[0]
+
+    hint = (hint or "").strip().lower()
+    if hint:
+        for acct in accounts:
+            if hint == acct.get("name", "").lower():
+                return acct
+        for acct in accounts:
+            if hint in acct.get("user", "").lower():
+                return acct
+    return None
+
+
+def account_named(accounts, name):
+    """The account with this name, or None. Used to reply from the mailbox
+    an email actually arrived at."""
+    for acct in accounts:
+        if acct.get("name") == name:
+            return acct
+    return None

@@ -340,6 +340,7 @@ def call_model(messages):
 # become a recipient.
 COMPOSE_RE = re.compile(
     r"^(?:draft|write|compose|send|email)\b\s*(?:an?\s+)?(?:email\s+)?"
+    r"(?:from\s+(?P<acct>[^\s@]+)\s+)?"
     r"(?:to\s+)?(?P<rest>.+)$", re.I)
 
 REPLY_RE = re.compile(
@@ -453,6 +454,7 @@ BANNER = "\n" + "\n".join([
     "",
     "  " + ui.bold("Write an email"),
     _cmd("draft to x@y.com …", "compose, review, then send"),
+    _cmd("draft from work to …", "pick which mailbox it comes from"),
     _cmd("reply to 3", "reply to one from the last listing"),
     _cmd("send · edit · cancel", "what to say once a draft is shown"),
     "",
@@ -752,8 +754,16 @@ def main(argv=None):
                 print()
                 continue
             accounts = email_tool.get_accounts()
-            pending = _parse_draft(text, addr,
-                                   account=accounts[0] if accounts else None)
+            from_acct = (mailer.account_named(accounts, record.get("account"))
+                         or mailer.pick_account(accounts))
+            if from_acct is None:
+                print()
+                _say(f"That arrived at '{record.get('account')}', which is not "
+                     "in your configured mailboxes any more. Say "
+                     "'draft from <mailbox> to …' instead.", ui.red)
+                print()
+                continue
+            pending = _parse_draft(text, addr, account=from_acct)
             pending.subject = subject
             _show_draft(pending)
             continue
@@ -768,6 +778,16 @@ def main(argv=None):
                      "one you mean.", ui.red)
                 print()
                 continue
+            accounts = email_tool.get_accounts()
+            from_acct = mailer.pick_account(accounts, compose.group("acct"))
+            if from_acct is None:
+                names = ", ".join(a["name"] for a in accounts)
+                print()
+                _say(f"Which mailbox should it come from? {names}", ui.red)
+                _say(f"Say: draft from <mailbox> to {to} …", ui.dim)
+                print()
+                continue
+
             want = compose.group("rest").replace(to, "").strip(" ,:-")
             try:
                 text = ask(DRAFT_PROMPT.format(ask=want or "a short note"),
@@ -777,9 +797,7 @@ def main(argv=None):
                 _say(str(exc), ui.red)
                 print()
                 continue
-            accounts = email_tool.get_accounts()
-            pending = _parse_draft(text, to,
-                                   account=accounts[0] if accounts else None)
+            pending = _parse_draft(text, to, account=from_acct)
             _show_draft(pending)
             continue
 

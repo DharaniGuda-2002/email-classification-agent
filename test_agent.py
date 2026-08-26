@@ -419,8 +419,14 @@ def test_mark_read_store():
 
     t._connect = boom
     try:
-        t.mark_read([b"1"], "INBOX")
+        # The warning it prints is the point of the test, so it is captured
+        # rather than left to look like a real failure in a clean run.
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()) as noise:
+            t.mark_read([b"1"], "INBOX")
         check("failed mark-read is swallowed, not raised", True)
+        check("and it says why", "no mailbox" in noise.getvalue())
     finally:
         t._connect = original
 
@@ -507,12 +513,13 @@ def test_compose():
     check("'send it to bob' is not a bare confirm",
           not agent.CONFIRM_RE.match("send it to bob"))
 
-    d = mailer.Draft("hr@acme.com", "Hi", "Body text")
+    acct0 = {"user": "me@x.com", "name": "default", "host": "imap.gmail.com"}
+    d = mailer.Draft("hr@acme.com", "Hi", "Body text", account=acct0)
     check("a complete draft has no problems", d.problems() == [])
     check("bad address is a problem",
-          mailer.Draft("nope", "Hi", "x").problems())
+          mailer.Draft("nope", "Hi", "x", account=acct0).problems())
     check("empty body is a problem",
-          mailer.Draft("a@b.com", "Hi", "").problems())
+          mailer.Draft("a@b.com", "Hi", "", account=acct0).problems())
     check("subject is bounded",
           len(mailer.Draft("a@b.com", "x" * 500, "b").subject)
           <= mailer.MAX_SUBJECT)
@@ -522,6 +529,40 @@ def test_compose():
     check("hard wraps are reflowed", d2.body == "line one line two")
     check("preview shows the real body", d2.body in d2.preview())
     check("preview shows the real recipient", "a@b.com" in d2.preview())
+
+    # Which mailbox it leaves from is a decision, not a detail: with two
+    # connected, a reply to a professor leaving from a personal Gmail is
+    # exactly what the confirmation step exists to catch.
+    one = [{"name": "default", "user": "a@x.com"}]
+    two = [{"name": "personal", "user": "a@gmail.com"},
+           {"name": "school", "user": "b@ncsu.edu"}]
+    check("one mailbox needs no choice",
+          mailer.pick_account(one)["name"] == "default")
+    # Several with no hint returns None so the caller asks. Sending from the
+    # wrong address is not a mistake you can take back.
+    check("several with no hint refuses to pick",
+          mailer.pick_account(two) is None)
+    check("hint matches the name",
+          mailer.pick_account(two, "school")["name"] == "school")
+    check("hint matches the address",
+          mailer.pick_account(two, "ncsu.edu")["name"] == "school")
+    check("an unknown hint refuses",
+          mailer.pick_account(two, "nonsense") is None)
+    check("account_named finds it",
+          mailer.account_named(two, "school")["user"] == "b@ncsu.edu")
+    check("account_named misses cleanly",
+          mailer.account_named(two, "gone") is None)
+
+    # The preview must show every field that matters, From included.
+    acct = {"user": "b@ncsu.edu", "name": "school", "host": "imap.gmail.com"}
+    p = mailer.Draft("prof@ncsu.edu", "Q", "Hi", account=acct).preview()
+    check("preview names the sending mailbox", "b@ncsu.edu" in p)
+    check("a draft with no mailbox cannot send",
+          mailer.Draft("a@b.com", "S", "B").problems())
+
+    check("'from school' parses",
+          agent.COMPOSE_RE.match("draft from school to p@x.edu hi")
+          .group("acct") == "school")
 
     check("gmail smtp host", mailer.smtp_host("imap.gmail.com") == "smtp.gmail.com")
     check("outlook smtp host",
@@ -805,7 +846,13 @@ def test_config():
     var = "TEST_ENV_INT"
     try:
         os.environ[var] = "abc"
-        check("non-numeric falls back to the default", t._env_int(var, 50) == 50)
+        # Same as above: the config warning is what is being tested, so it is
+        # captured rather than printed over a clean run.
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()):
+            fallback = t._env_int(var, 50)
+        check("non-numeric falls back to the default", fallback == 50)
         os.environ[var] = "0"
         check("zero clamps up to 1", t._env_int(var, 50) == 1)
         os.environ[var] = "-5"
