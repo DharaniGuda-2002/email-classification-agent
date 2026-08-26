@@ -64,6 +64,18 @@ def _env_int(name, default):
         return default
 
 
+# Progress chatter. On by default it competes with the chat's own status line
+# and reads as debug spam; MAIL_DEBUG=1 brings it back when you are tracing a
+# fetch. Warnings are not routed through here — those you always want.
+DEBUG = os.environ.get("MAIL_DEBUG", "").strip().lower() in ("1", "true", "yes")
+
+
+def _trace(line):
+    """A progress note, shown only when tracing. Always stderr, never stdout."""
+    if DEBUG:
+        print(f"   {line}", file=sys.stderr)
+
+
 HARD_LIMIT = _env_int("MAX_EMAILS", 50)
 
 # The escape hatch: marking mail read is the default so what you've seen stops
@@ -220,6 +232,10 @@ CONFIRMATION_RE = re.compile(r"""
   # "received your job application" — allow a word between, or the exact match
   # misses the most common phrasing.
   | received \s+ your \s+ (?:\w+ \s+)? application
+  # LinkedIn sends one of these per application — eight in a single day here,
+  # all untagged, which left them counted as generic noise.
+  | application \s+ was \s+ sent \s+ to
+  | you(?:'ve|\s+have)? \s+ applied \s+ to
   | successfully \s+ submitted
   # "talent community" is deliberately absent: the recurring jobs2web alerts
   # all cite it in their footer, so it tagged weekly job blasts as though
@@ -408,12 +424,19 @@ def _kind(msg, text, category):
     what it wants. Marketing is never tagged: "deadline" and "offer" are the
     native tongue of promotional mail and would flood the action list.
     """
-    if category in ("promotions", "social", "spam"):
-        return ""
-
     blob = f"{_decode(msg.get('Subject'))}\n{text}"
+
+    # Checked BEFORE the marketing guard below. Gmail files plenty of
+    # recruiting mail under Promotions, and a rejection sitting there still
+    # matters — a Delphi-US "we regret to inform you that the position is
+    # now closed" was silently dropped for exactly this reason. The patterns
+    # are specific enough that marketing does not trip them: AliExpress's
+    # "you'd regret missing this" is not "we regret to inform you".
     if REJECTION_RE.search(blob):
         return "rejection"
+
+    if category in ("promotions", "social", "spam"):
+        return ""
     if ACTION_STRONG_RE.search(blob):      # interview, assessment — always a reply
         return "action"
     # Confirmation beats weak-action boilerplate and the _is_personal guess:
@@ -691,7 +714,7 @@ def _tag(emails, snippets, use_model=True, max_model_calls=None):
                                    max_calls=max_model_calls
                                    or classifier.MAX_CALLS)
         if filled:
-            print(f"   [model] tagged {filled} the patterns missed", file=sys.stderr)
+            _trace(f"[model] tagged {filled} the patterns missed")
 
     for e in emails:
         e["priority"] = _priority(e["msg"], e["labels"], e["category"], e["kind"])
@@ -735,10 +758,9 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
     if not accounts:
         raise RuntimeError("No email accounts configured.")
 
-    global _LAST_FOLDER
-    print(f"   [tool] read_emails days={days} category={category} "
-          f"snippets={include_snippets} accounts={[a['name'] for a in accounts]}",
-          file=sys.stderr)
+    _trace(f"[tool] read_emails days={days} category={category} "
+           f"snippets={include_snippets} "
+           f"accounts={[a['name'] for a in accounts]}")
     # The model supplies these. Clamp rather than trust.
     try:
         limit = max(1, min(int(limit), HARD_LIMIT))
@@ -849,6 +871,13 @@ def read_emails(unread_only=True, limit=DEFAULT_LIMIT, category=None,
         "subject": _decode(e["msg"]["Subject"]),
         "snippet": all_snippets.get(e["id"], ""),
         "kind": e["kind"],
+        # Needed by triage_report to split untagged mail into "worth
+        # knowing" and noise.
+        "category": e["category"],
+        # Untagged mail from a real person is worth a glance; untagged bulk
+        # is noise. The flag is computed here because the message object is
+        # not kept after this point.
+        "personal": _is_personal(e["msg"]),
         "priority": e["priority"],
         "url": e["url"],
         "account": e.get("account", ""),
@@ -888,24 +917,14 @@ def links(important_only=True):
     if not rows:
         return ""
 
+    # Subject and link only. The snippet is already in the section above, and
+    # repeating it here pushed the actual links off the bottom of the screen.
     lines = ["Open in Gmail:"]
     for n, r in rows:
         tag = f"[{r['kind']}] " if r["kind"] else ""
-        # Subject line
-        lines.append(f"  {n}. {tag}{r['subject'][:72]}")
-        # 2-line summary from snippet
-        snippet = r.get("snippet", "").strip()
-        if snippet:
-            # Wrap to ~72 chars for two lines
-            import textwrap
-            wrapped = textwrap.wrap(snippet, width=72)
-            for i, line in enumerate(wrapped[:2]):
-                lines.append(f"     {line}")
-            if len(wrapped) > 2:
-                lines.append(f"     ...")
-        # URL
+        subject = _shorten(" ".join(r["subject"].split()), 64)
+        lines.append(f"  {n}. {tag}{subject}")
         lines.append(f"     {r['url']}")
-        lines.append("")  # blank line between entries
     return "\n".join(lines)
 
 
@@ -964,6 +983,57 @@ def brief(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
     return "\n".join(lines)
 
 
+def summarize_all(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
+    """
+    Comprehensive summary of ALL unread emails with snippets.
+    Reads full window, includes every email with a 2-line preview.
+    """
+    # Read with snippets so we can show previews
+    read_emails(unread_only=True, limit=limit, days=days, include_snippets=True, max_model_calls=20, account=account)
+    records = list(_LAST_RECORDS.values())
+
+    window = "today" if days == 1 else f"the last {days} days"
+    if not records:
+        return f"No new mail {window}."
+
+    by_kind = Counter(r["kind"] for r in records)
+    by_category = Counter(r["category"] for r in records)
+
+    accounts_seen = set(r.get("account", "") for r in records if r.get("account"))
+    acct_suffix = f" (across {len(accounts_seen)} account(s))" if len(accounts_seen) > 1 else ""
+
+    lines = [f"📬  {len(records)} unread email{'s' if len(records) != 1 else ''} {window}{acct_suffix}"]
+    lines.append(f"   Categories: {', '.join(f'{c} ({n})' for c, n in sorted(by_category.items()))}")
+    lines.append(f"   Kinds: {', '.join(f'{k} ({n})' for k, n in sorted(by_kind.items()) if k)}")
+
+    # Group by kind for detailed view
+    for kind_label, kind_emoji in [("action", "🔴"), ("rejection", "❌"), ("confirmation", "✅"), ("", "📄")]:
+        kind_emails = [r for r in records if r["kind"] == kind_label]
+        if not kind_emails:
+            continue
+
+        label = kind_label if kind_label else "other"
+        lines.append(f"\n{kind_emoji} {label.upper()} ({len(kind_emails)}):")
+
+        for r in kind_emails:
+            acct_tag = f" [{r['account']}]" if r.get("account") else ""
+            sender = _sender_name(r['from'])
+            subject = r['subject'][:70]
+            snippet = r.get("snippet", "").strip()
+
+            lines.append(f"  • {sender}{acct_tag}: {subject}")
+            if snippet:
+                # Show first 2 lines of snippet
+                import textwrap
+                wrapped = textwrap.wrap(snippet, width=80)
+                for line in wrapped[:2]:
+                    lines.append(f"      {line}")
+                if len(wrapped) > 2:
+                    lines.append("      ...")
+
+    return "\n".join(lines)
+
+
 def _sender_name(from_header):
     """
     "Acme Careers <no-reply@acme.com>" -> "Acme Careers". For speech.
@@ -1011,7 +1081,7 @@ def correct(number, label):
 
 def read_email_body(number):
     """Body of ONE email, by the number shown in read_emails."""
-    print(f"   [tool] read_email_body #{number}", file=sys.stderr)
+    _trace(f"[tool] read_email_body #{number}")
     try:
         number = int(number)
     except (TypeError, ValueError):
@@ -1077,3 +1147,85 @@ def mark_read(ids, folder="INBOX"):
 if __name__ == "__main__":
     # Smoke check: does IMAP work at all, without involving the model?
     print(read_emails())
+
+
+def _shorten(text, limit):
+    """Trim to `limit`, breaking at a space so words stay whole."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0]
+    return (cut or text[:limit]).rstrip(" -–—:,") + "…"
+
+
+def triage_report(days=DEFAULT_DAYS, limit=HARD_LIMIT, account=None):
+    """
+    The full triage, grouped and counted in code.
+
+    Asking a local 4B to group and count 35 emails does not work: it writes
+    two of the five sections, covers seven of the messages, and files a
+    [confirmation] under "needs a reply" because the subject named a company.
+    The tags are already computed here and they are exact, so the grouping
+    belongs here too.
+
+    Returns markdown for ui.render(). The model still answers questions —
+    it is just no longer asked to do arithmetic over a list it half-read.
+    """
+    read_emails(unread_only=True, limit=limit, days=days,
+                include_snippets=True, max_model_calls=20, account=account)
+    records = list(_LAST_RECORDS.values())
+
+    window = "today" if days == 1 else f"the last {days} days"
+    if not records:
+        return f"No unread mail {window}."
+
+    def of_kind(kind):
+        return [r for r in records if r["kind"] == kind]
+
+    actions, rejections = of_kind("action"), of_kind("rejection")
+    confirmations = of_kind("confirmation")
+    tagged = {id(r) for r in actions + rejections + confirmations}
+
+    # Everything untagged splits on Gmail's own category: marketing and
+    # social are noise, the rest is worth a glance.
+    rest = [r for r in records if id(r) not in tagged]
+    # A human writing to you is worth a glance even with no tag and a low
+    # priority; a job alert is not. Without the personal check every
+    # untagged email fell into Noise, because bulk mail is nearly all LOW.
+    worth = [r for r in rest
+             if r["category"] not in ("promotions", "social")
+             and (r["personal"] or r["priority"] != "LOW")]
+    noise = [r for r in rest if r not in worth]
+
+    def line(r):
+        who = _sender_name(r["from"])
+        subject = _shorten(" ".join(r["subject"].split()), 72)
+        return f"* {who} — {subject}"
+
+    out = [f"**{len(records)} unread {window}**"]
+
+    out.append(f"\n**Needs a reply ({len(actions)})**")
+    out += [line(r) for r in actions] or ["Nothing is waiting on you."]
+
+    if rejections:
+        out.append(f"\n**Rejections ({len(rejections)})**")
+        out += [line(r) for r in rejections]
+
+    if worth:
+        out.append(f"\n**Worth knowing ({len(worth)})**")
+        out += [line(r) for r in worth[:8]]
+        if len(worth) > 8:
+            out.append(f"* …and {len(worth) - 8} more")
+
+    if confirmations:
+        names = ", ".join(dict.fromkeys(_sender_name(r["from"])
+                                        for r in confirmations))
+        out.append(f"\n**Confirmations ({len(confirmations)})**")
+        out.append(f"Applications acknowledged: {names[:200]}")
+
+    if noise:
+        by_cat = Counter(r["category"] for r in noise)
+        detail = ", ".join(f"{n} {c}" for c, n in by_cat.most_common())
+        out.append(f"\n**Noise ({len(noise)})**")
+        out.append(detail)
+
+    return "\n".join(out)

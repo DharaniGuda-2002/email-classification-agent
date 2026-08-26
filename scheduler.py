@@ -14,7 +14,6 @@ change your mind mid-conversation.
 import plistlib
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent

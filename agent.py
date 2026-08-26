@@ -78,6 +78,7 @@ def _env_str(name, default=""):
         raw = raw.split("#")[0].strip()
     return raw
 
+
 LM_BASE_URL = _env_str("LM_BASE_URL", "http://localhost:1234/v1").rstrip("/")
 MODEL = _env_str("MODEL")
 ENDPOINT = f"{LM_BASE_URL}/chat/completions"
@@ -120,6 +121,20 @@ them; do not second-guess them or re-sort by your own reading.
                   deadline, or a real person writing to you directly
   [rejection]     an application that was turned down
   [confirmation]  an application acknowledged. Nothing to do.
+
+The tag decides the section. It is not a hint you weigh against the subject
+line:
+
+  [confirmation] -> Confirmations. Always. "Your application was sent to X"
+                    is an acknowledgement even though it names a company and
+                    a role. It never goes under Needs a reply.
+  [rejection]    -> Rejections. Always.
+  [action]       -> Needs a reply. Always.
+  untagged       -> Worth knowing, or Noise if it is a promotion, a social
+                    notification, or a job alert.
+
+Count every email the tool returned. If it says "Showing 35 of 35", your
+sections must account for 35 — not the handful you found easiest to describe.
 
 ANSWER THE QUESTION THAT WAS ASKED
 Asked something specific — "how many rejections?", "anything from Google?",
@@ -297,32 +312,54 @@ def _show_links(important_only=True):
         print()
 
 
+def _say(text, tint=None):
+    """
+    Print a short agent message at the same left margin as a rendered reply.
+
+    Without this, one-line confirmations sit at column 0 while answers are
+    indented, and the eye reads them as belonging to different speakers.
+    """
+    body = tint(text) if tint else text
+    print("\n".join(f"  {ln}" for ln in body.splitlines()))
+
+
+def cyan_bold(text):
+    return ui.cyan(ui.bold(text))
+
+
 def _cmd(name, desc):
     """One line of the command list: a colored name, padded, then its hint."""
-    return f"  {ui.cyan(name.ljust(19))}{ui.dim(desc)}"
+    return f"    {ui.cyan(name.ljust(21))}{ui.dim(desc)}"
 
 
 BANNER = "\n" + "\n".join([
-    ui.cyan(ui.bold("📬  Inbox triage"))
-    + ui.dim("  — marks what you've seen as read · important mail stays "
-             "unread · Ctrl-C or 'quit' to leave"),
+    "  " + cyan_bold("📬  Inbox triage"),
+    "  " + ui.rule(),
+    "  " + ui.dim("Marks what you've seen as read · important mail stays unread"),
     "",
-    ui.bold("Try asking:"),
-    ui.dim("  what needs my attention?"),
-    ui.dim("  summarize my unread mail"),
-    ui.dim("  anything in promotions worth keeping?"),
-    ui.dim("  what came in the last 3 days?"),
+    "  " + ui.bold("Try asking"),
+    ui.dim("    what needs my attention?"),
+    ui.dim("    summarize my unread mail"),
+    ui.dim("    what came in the last 3 days?"),
+    ui.dim("    anything in promotions worth keeping?"),
     "",
-    ui.bold("Commands:"),
+    "  " + ui.bold("Run it on a schedule"),
+    _cmd("check every 2 hours", "also 30 minutes, 4h, 6h…"),
+    _cmd("status", "what's scheduled right now"),
+    _cmd("stop", "cancel the schedule"),
+    "",
+    "  " + ui.bold("Commands"),
     _cmd("links", "Gmail links for the last listing"),
     _cmd("3 is a rejection", "teach it a tag it got wrong"),
     _cmd("new", "start a fresh conversation"),
-    _cmd("help", "show this again"),
+    _cmd("help  ·  quit", "show this again  ·  leave"),
     "",
 ]) + "\n"
 
-TRIAGE = ("Triage my unread mail. Include snippets so you can summarize, "
-          "and group by what needs attention.")
+
+TRIAGE = ("Triage ALL my unread mail: call read_emails once with limit=50 "
+          "and include_snippets=true, then group every email it returns by "
+          "what needs attention.")
 
 
 def ask(instruction, session_name="", days=DEFAULT_DAYS, status="thinking…"):
@@ -352,10 +389,20 @@ def ask(instruction, session_name="", days=DEFAULT_DAYS, status="thinking…"):
 
 
 def triage(days=DEFAULT_DAYS, session_name=""):
-    """One pass: read the inbox, print the summary and the links. No prompt."""
-    reply = ask(f"{TRIAGE} Cover the last {days} day(s).", session_name, days,
-                status="Reading your inbox…")
-    print(reply)
+    """
+    One pass: read the inbox, print the summary and the links. No prompt.
+
+    Grouped in code rather than by the model. The tags are exact and the
+    model is not — asked to sort 35 emails it wrote two of five sections and
+    covered seven of them. It still answers everything you type; it is just
+    not the thing counting.
+    """
+    token = ui.thinking("Reading your inbox…")
+    try:
+        reply = email_tool.triage_report(days=days)
+    finally:
+        ui.done_thinking(token)
+    print(ui.render(reply))
     print()
     _show_links()
     return reply
@@ -387,6 +434,7 @@ def main(argv=None):
     if "--help" in argv or "-h" in argv:
         print(__doc__)
         print("  --brief          one short summary, no model prose (for Siri)")
+        print("  --summarize      detailed summary with snippets for all unread mail")
         print("  --notify         send macOS notification after brief (for launchd)")
         print('  --once "..."     one instruction, no chat (Siri and cron)')
         print("  --session NAME   remember the conversation between runs")
@@ -411,6 +459,19 @@ def main(argv=None):
         print(reply)
         if notify:
             scheduler.notify("Mail digest", reply)
+        return
+
+    if "--summarize" in argv:
+        # Comprehensive summary with snippets for all unread emails
+        siri_log(f"ASK   summarize all emails (days={days})")
+        try:
+            reply = email_tool.summarize_all(days=days)
+        except Exception as exc:
+            siri_log(f"ERROR {type(exc).__name__}: {exc}")
+            print("Could not check your email.")
+            return
+        siri_log(f"REPLY {reply!r}")
+        print(reply)
         return
 
     if "--once" in argv:
@@ -443,7 +504,7 @@ def main(argv=None):
         try:
             if instruction:
                 reply = ask(instruction, session_name, days)
-                print(reply)
+                print(ui.render(reply))
             else:
                 reply = triage(days, session_name)
         except Exception as exc:
@@ -459,9 +520,12 @@ def main(argv=None):
     try:
         triage(days, session_name)
     except Exception as exc:
-        print(ui.red(f"\n{exc}\n"))
-        print(ui.dim("You can still type — but check LM Studio is running "
-                     "before expecting answers."))
+        print()
+        _say(str(exc), ui.red)
+        print()
+        _say("You can still type — but check LM Studio is running before "
+             "expecting answers.", ui.dim)
+        print()
 
     _load_history()
     while True:
@@ -478,7 +542,9 @@ def main(argv=None):
 
         if user.lower() in ("new", "start over", "reset"):
             session.clear(session_name)
-            print(ui.green("\nStarting fresh.\n"))
+            print()
+            _say("Starting fresh.", ui.green)
+            print()
             continue
 
         # Handled here rather than as a model tool. A correction is the user
@@ -488,7 +554,9 @@ def main(argv=None):
         if fix:
             msg = email_tool.correct(fix.group(1), fix.group(2))
             tint = ui.red if msg.startswith("ERROR") else ui.green
-            print("\n" + tint(msg) + "\n")
+            print()
+            _say(msg, tint)
+            print()
             continue
 
         if user.lower() in ("links", "link"):
@@ -503,14 +571,14 @@ def main(argv=None):
         # Scheduling intents — handled in code, not by the model.
         # "check every 2 hours", "schedule every 30 minutes", "stop checking"
         if scheduler.STATUS_RE.match(user):
-            print(ui.cyan(scheduler.status()))
+            _say(scheduler.status(), ui.cyan)
             continue
         if scheduler.STOP_RE.match(user):
-            print(ui.green(scheduler.unschedule()))
+            _say(scheduler.unschedule(), ui.green)
             continue
         hours = scheduler.parse_interval(user)
         if hours is not None:
-            print(ui.green(scheduler.schedule(hours)))
+            _say(scheduler.schedule(hours), ui.green)
             continue
 
         # The status line shown by ask() is erased before this prints, so the
@@ -518,9 +586,11 @@ def main(argv=None):
         try:
             reply = ask(user, session_name, days)
         except Exception as exc:
-            print(ui.red(f"\n{exc}\n"))
+            print()
+            _say(str(exc), ui.red)
+            print()
             continue
-        print(f"{ui.cyan(ui.bold('Agent:'))} {reply}\n")
+        print(ui.render(reply) + "\n")
         _show_links()
 
     _save_history()

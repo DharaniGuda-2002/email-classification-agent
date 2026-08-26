@@ -198,6 +198,29 @@ def test_kind():
     check("confirmation with a word between",
           t._kind(m, "we received your job application", "primary") == "confirmation")
 
+    # Gmail files plenty of recruiting mail under Promotions. The category
+    # guard used to return "" before the rejection check ever ran, so a
+    # Delphi-US "we regret to inform you that the position is now closed"
+    # sitting in Promotions was silently dropped from the Rejections list.
+    for cat in ("promotions", "social", "updates", "primary"):
+        check(f"rejection survives category={cat}",
+              t._kind(m, "we regret to inform you that the position is closed",
+                      cat) == "rejection")
+
+    # ...but marketing must still not become a rejection. "You'd regret
+    # missing this" is not "we regret to inform you".
+    check("promo 'regret' is not a rejection",
+          t._kind(m, "You'd regret missing this sale", "promotions") == "")
+
+    # LinkedIn sends one of these per application — eight in one day here,
+    # all untagged, so they were counted as generic noise.
+    check("'application was sent to' is a confirmation",
+          t._kind(m, "Your application was sent to Wilson Elser", "updates")
+          == "confirmation")
+    check("'you've applied to' is a confirmation",
+          t._kind(m, "You've applied to a position at Analog Devices", "updates")
+          == "confirmation")
+
     # A confirmation that looks personal must stay a confirmation: the content
     # signal beats the _is_personal guess. Six acknowledgements landed under
     # "needs a reply" when this order was reversed.
@@ -448,6 +471,42 @@ def test_gmail_links():
 
 # ------------------------------------------------------------------- config
 
+def test_ui_render():
+    print("\nterminal rendering")
+    import ui
+
+    # Piped output must stay byte-clean: Siri, cron and the log files all
+    # read this, and an ANSI escape in a Show Result card is visible junk.
+    plain = ui.render("**Rejections**\n* Adobe\n* Notion")
+    check("no ANSI when not a terminal", "\x1b" not in plain, repr(plain))
+
+    # The model answers in markdown whatever you ask, so a terminal that
+    # cannot render it shows literal asterisks.
+    check("heading loses its asterisks", "**" not in plain, repr(plain))
+    check("bullets become real bullets", plain.count("•") == 2, repr(plain))
+    check("heading text survives", "Rejections" in plain)
+
+    check("### headings render",
+          "Confirmations" in ui.render("### Confirmations")
+          and "#" not in ui.render("### Confirmations"))
+    check("numbered lists survive", "1." in ui.render("1. first"))
+    check("inline bold is unwrapped",
+          ui.render("a **b** c").strip() == "a b c")
+
+    # A long bullet must hang under its own text, not under the marker.
+    wrapped = ui.render("* " + "word " * 60).splitlines()
+    check("long bullet wraps", len(wrapped) > 1)
+    check("wrapped lines are indented past the bullet",
+          all(ln.startswith("    ") for ln in wrapped[1:]), repr(wrapped[1:2]))
+
+    check("empty input is empty", ui.render("") == "")
+    check("None is empty", ui.render(None) == "")
+    check("plain prose passes through", "hello" in ui.render("hello"))
+    # Runs of blank lines would otherwise push the answer off screen.
+    check("blank runs collapse", "\n\n\n" not in ui.render("a\n\n\n\n\nb"))
+    check("width is sane", 20 < ui.width() <= ui.MAX_WIDTH)
+
+
 def test_siri_log():
     print("\nsiri logging")
     import agent
@@ -558,8 +617,10 @@ def test_scheduler():
     print("\nscheduler")
     # Interval parsing from plain English. "every hour" with no number means
     # one hour; the unit alone carries the meaning.
-    check("every 2 hours -> 2.0", scheduler.parse_interval("check every 2 hours") == 2.0)
-    check("every 30 minutes -> 0.5", scheduler.parse_interval("every 30 minutes") == 0.5)
+    check("every 2 hours -> 2.0",
+          scheduler.parse_interval("check every 2 hours") == 2.0)
+    check("every 30 minutes -> 0.5",
+          scheduler.parse_interval("every 30 minutes") == 0.5)
     check("run every 4h -> 4.0", scheduler.parse_interval("run every 4h") == 4.0)
     check("every hour -> 1.0", scheduler.parse_interval("every hour") == 1.0)
 
@@ -575,7 +636,8 @@ def test_scheduler():
 
     # Intents are detected in code, not by the model.
     check("'status' matches STATUS_RE", bool(scheduler.STATUS_RE.match("status")))
-    check("'stop checking' matches STOP_RE", bool(scheduler.STOP_RE.match("stop checking")))
+    check("'stop checking' matches STOP_RE",
+          bool(scheduler.STOP_RE.match("stop checking")))
     check("bare 'stop' matches STOP_RE", bool(scheduler.STOP_RE.match("stop")))
     check("'check every 2 hours' is not a stop",
           not scheduler.STOP_RE.match("check every 2 hours"))
@@ -586,7 +648,8 @@ if __name__ == "__main__":
     for fn in (test_rejections, test_actions, test_sender_classification,
                test_body_extraction, test_hostile_input, test_clean,
                test_kind, test_priority, test_sender_name,
-               test_siri_log, test_session, test_window, test_selection,
+               test_ui_render, test_siri_log, test_session,
+               test_window, test_selection,
                test_fetch_map, test_listing_invalidation,
                test_mark_read_selection, test_mark_read_store,
                test_mark_read_disabled,
