@@ -330,7 +330,9 @@ For a new email with more than one mailbox and no `from`, it asks rather than
 picking; sending from the wrong address is not a mistake you can take back.
 
 Sending uses the same app password over SMTP, so there is nothing extra to
-configure. `./mail check` verifies the SMTP login without sending anything.
+configure. `./mail check` proves the SMTP login as part of preflight, without
+sending anything — a mailbox can allow IMAP and block SMTP, and it is better
+to find that out there than with a draft you meant to send.
 
 ### The application tracker
 
@@ -526,6 +528,7 @@ Everything lives in `.env`:
 | `MAX_EMAILS` | `50` | ceiling per call |
 | `MARK_READ` | `true` | `false` = strictly read-only |
 | `SPAM_FOLDER` | `[Gmail]/Spam` | your provider's spam folder name |
+| `EMAIL_NAME_DISPLAY` | none | the name recipients see on sent mail |
 | `MAIL_DEBUG` | off | `1` shows fetch tracing |
 | `CORRECTIONS_FILE` | `.corrections.json` | where corrections live |
 

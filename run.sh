@@ -170,6 +170,22 @@ then
 fi
 ok "IMAP connected"
 
+# Sending uses the same credential, but a mailbox can allow IMAP and block
+# SMTP. Better to find that out here than with a draft you meant to send.
+smtp_note=$($PY - <<'EOF' 2>/dev/null
+import email_tool, mailer
+accounts = email_tool.get_accounts()
+ok, msg = mailer.check_login(accounts[0]) if accounts else (False, "no account")
+print(("ok " if ok else "warn ") + msg)
+EOF
+)
+case "$smtp_note" in
+    ok*)   ok "SMTP ready (sending works)" ;;
+    warn*) printf '  \033[33mwarn\033[0m %s\n' "${smtp_note#warn }" >&2
+           printf '       Reading still works; you just cannot send.\n' >&2 ;;
+    *)     printf '  \033[33mwarn\033[0m could not check SMTP\n' >&2 ;;
+esac
+
 # -------------------------------------------------------------- 4. LM Studio
 step "4/4  Model"
 url=$($PY -c "import agent; print(agent.ENDPOINT)")
